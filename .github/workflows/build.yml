@@ -1,0 +1,54 @@
+name: Build binaries
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows x86_64
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test
+        run: cargo +stable-x86_64-pc-windows-msvc test --release --locked
+
+      - name: Build
+        run: cargo +stable-x86_64-pc-windows-msvc build --release --locked
+
+      - name: Name the executable
+        run: Copy-Item target/release/screacher-radio.exe screacher-radio-windows-x86_64.exe
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: screacher-radio-windows-x86_64.exe
+          archive: false
+          if-no-files-found: error
+
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test and build in Docker
+        run: docker build --output type=local,dest=dist/linux .
+
+      - name: Package the executable
+        run: tar -czf screacher-radio-linux-x86_64.tar.gz -C dist/linux screacher-radio
+
+      - name: Upload Linux archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: screacher-radio-linux-x86_64.tar.gz
+          archive: false
+          if-no-files-found: error
