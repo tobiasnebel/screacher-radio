@@ -14,13 +14,15 @@ use rtrb::{Consumer, RingBuffer};
 use url::Url;
 
 use crate::{
+    metadata::TrackInfo,
     station::{self, BoxError},
     ui::Event,
 };
 
 #[derive(Clone)]
 pub enum PlaybackEvent {
-    Started,
+    Started(Instant),
+    TrackChanged(TrackInfo),
     Ended,
     Failed(String),
 }
@@ -44,8 +46,8 @@ impl Playback {
         thread::Builder::new()
             .name("radio-playback".into())
             .spawn(move || {
-                let result = play(&url, volume, levels, &cancelled, || {
-                    messages.send(Event::Playback(id, PlaybackEvent::Started));
+                let result = play(&url, volume, levels, &cancelled, move |event| {
+                    messages.send(Event::Playback(id, event));
                 });
                 if !cancelled.load(Ordering::Relaxed) {
                     let event = match result {
@@ -78,13 +80,17 @@ fn play(
     volume: Arc<AtomicU8>,
     levels: Arc<AtomicU16>,
     cancelled: &Arc<AtomicBool>,
-    started: impl FnOnce(),
+    notify: impl Fn(PlaybackEvent) + Clone + Send + 'static,
 ) -> Result<(), BoxError> {
     let opening_deadline = Instant::now() + Duration::from_secs(25);
     let opening = Arc::new(AtomicBool::new(true));
     let is_cancelled = || cancelled.load(Ordering::Relaxed);
-    let reader =
-        station::open_stream(url, || is_cancelled() || Instant::now() >= opening_deadline)?;
+    let notify_track = notify.clone();
+    let reader = station::open_stream(
+        url,
+        || is_cancelled() || Instant::now() >= opening_deadline,
+        move |track| notify_track(PlaybackEvent::TrackChanged(track)),
+    )?;
     let input = StreamReader {
         inner: Mutex::new(reader),
         cancelled: cancelled.clone(),
@@ -135,7 +141,7 @@ fn play(
         frame_remaining: 0,
         silent_frame: false,
     });
-    started();
+    notify(PlaybackEvent::Started(Instant::now()));
 
     let is_running = || !is_cancelled() && !output_failed.load(Ordering::Relaxed);
     while is_running() {
@@ -354,14 +360,13 @@ mod tests {
     }
 
     #[test]
-    fn decodes_first_playlist_entry_over_http_without_seeking() {
+    fn decodes_first_playlist_entry_and_reports_icy_metadata_over_http() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let playlist = format!("http://{}/list.m3u", listener.local_addr().unwrap());
         let server = thread::spawn(move || {
             // MPEG-1 Layer III, 128 kbps, 44.1 kHz stereo. Zeroed side information yields silence.
             let mut frame = [0_u8; 417];
             frame[..4].copy_from_slice(&[0xff, 0xfb, 0x90, 0x64]);
-            let mp3 = frame.repeat(8);
             for expected in ["/list.m3u", "/live"] {
                 let (mut stream, _) = listener.accept().unwrap();
                 stream
@@ -374,20 +379,37 @@ mod tests {
                     request.push(byte[0]);
                 }
                 assert!(request.starts_with(format!("GET {expected} HTTP/1.1\r\n").as_bytes()));
-                let (mime, body): (&str, &[u8]) = if expected == "/list.m3u" {
-                    ("audio/x-mpegurl", b"#EXTM3U\n/live\n/unused\n")
+                assert!(
+                    String::from_utf8_lossy(&request)
+                        .to_ascii_lowercase()
+                        .contains("\r\nicy-metadata: 1\r\n")
+                );
+                if expected == "/list.m3u" {
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: audio/x-mpegurl\r\nConnection: close\r\n\r\n#EXTM3U\n/live\n/unused\n").unwrap();
                 } else {
-                    ("audio/mpeg", &mp3)
-                };
-                write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nConnection: close\r\n\r\n"
-                )
-                .unwrap();
-                stream.write_all(body).unwrap();
+                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nicy-metaint: {}\r\nConnection: close\r\n\r\n", frame.len()).unwrap();
+                    let mut metadata = [0; 32];
+                    let title = b"StreamTitle='Artist - Song';";
+                    metadata[..title.len()].copy_from_slice(title);
+                    let mut body = Vec::new();
+                    for _ in 0..8 {
+                        body.extend_from_slice(&frame);
+                        body.push(2);
+                        body.extend_from_slice(&metadata);
+                    }
+                    stream.write_all(&body).unwrap();
+                }
             }
         });
-        let reader = station::open_stream(&Url::parse(&playlist).unwrap(), || false).unwrap();
+        let (tracks, received) = std::sync::mpsc::channel();
+        let reader = station::open_stream(
+            &Url::parse(&playlist).unwrap(),
+            || false,
+            move |track| {
+                tracks.send(track).unwrap();
+            },
+        )
+        .unwrap();
         let mut decoder = decode_stream(StreamReader {
             inner: Mutex::new(reader),
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -398,6 +420,13 @@ mod tests {
         assert_eq!(decoder.sample_rate(), 44_100);
         assert_eq!(decoder.channels(), 2);
         assert_eq!(decoder.by_ref().take(4096).count(), 4096);
+        assert_eq!(
+            received.try_recv().unwrap(),
+            TrackInfo {
+                artist: "Artist".into(),
+                title: "Song".into()
+            }
+        );
         server.join().unwrap();
     }
 }

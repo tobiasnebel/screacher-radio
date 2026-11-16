@@ -5,13 +5,22 @@ Kleiner Webradio-Player in Rust mit FLTK für Windows und Linux.
 ## Bedienung
 
 - Unter **Hinzufügen…** einen Namen und eine HTTP(S)-URL angeben. Direkte MP3-Streams sowie M3U- und PLS-Playlists werden unterstützt. Eine Playlist erscheint als ein Sender und spielt ihren ersten Stream.
-- **Play** startet den ausgewählten Sender. Beim Programmstart ist der zuletzt erfolgreich gespielte Sender vorausgewählt. **Stop** beendet die Wiedergabe.
-- Die horizontalen Balken **L** und **R** zeigen die Spitzenpegel nach der Lautstärkeregelung. Bei Mono zeigen beide denselben Pegel.
+- Das Dreieck startet den ausgewählten Sender, das Quadrat stoppt die Wiedergabe. Beim Programmstart ist der zuletzt erfolgreich gespielte Sender vorausgewählt.
+- Rechts neben der Senderliste stehen die Laufzeit seit Wiedergabestart und, wenn der Stream ICY-Metadaten liefert, Titel und Interpret. Ein Eintrag der Form `Interpret - Titel` wird in beide Felder aufgeteilt.
+- Die Lautstärke lässt sich auch mit dem Mausrad über dem Regler ändern. Die horizontalen Balken **L** und **R** zeigen die Spitzenpegel mit einem Verlauf von Grün über Gelb zu Rot. Bei Mono zeigen beide denselben Pegel.
 - Sender lassen sich löschen, als Favoriten markieren und nach Name oder URL suchen. **Nur Favoriten** lässt sich mit der Suche kombinieren.
-- Der **Sleeptimer** stoppt die Wiedergabe nach der eingegebenen Anzahl Minuten. Der Countdown läuft auch im Tray weiter.
+- Das Uhrsymbol öffnet den **Sleeptimer**. Er stoppt die Wiedergabe nach 15, 30, 45 oder 60 Minuten oder nach einer frei eingegebenen Dauer. Einen laufenden Timer kannst du um 5, 10 oder 15 Minuten verlängern. Beim Schließen des Dialogs und im Tray läuft der Countdown weiter.
 - Unter **Einstellungen…** lässt sich das Minimieren in den Tray aktivieren. Das Tray-Icon öffnet den Player wieder und bietet ein Menü zum Beenden. Unter Linux braucht der Desktop dafür eine StatusNotifierItem-kompatible Tray-Leiste.
 
-Senderliste, Favoriten, letzter Sender und Lautstärke speichert der Player in `settings.json`. Unter Windows liegt die Datei in `%APPDATA%\Screacher Radio\config`, unter Linux in `${XDG_CONFIG_HOME:-$HOME/.config}/screacherradio`.
+Der Player liest und speichert Sender und Favoriten in `stations.yaml` direkt neben der Programmdatei. Beim ersten Start ohne diese Datei übernimmt er vorhandene Sender aus `settings.json`. Zum Ändern der Senderliste muss der Programmordner beschreibbar sein. Die YAML-Datei kannst du mit der Programmdatei in einen anderen Ordner mitnehmen.
+
+```yaml
+- name: Mein Sender
+  url: https://example.org/radio.mp3
+  favorite: true
+```
+
+Letzter Sender und Lautstärke bleiben in `settings.json`. Unter Windows liegt die Datei in `%APPDATA%\Screacher Radio\config`, unter Linux in `${XDG_CONFIG_HOME:-$HOME/.config}/screacherradio`.
 
 ## Downloads aus GitHub Actions
 

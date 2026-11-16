@@ -1,11 +1,14 @@
 use std::{
     error::Error,
     io::{self, BufRead, BufReader, Read},
+    num::NonZeroUsize,
     time::Duration,
 };
 
 use ureq::{Agent, ResponseExt, http::header::CONTENT_TYPE};
 use url::Url;
+
+use crate::metadata::{IcyReader, TrackInfo};
 
 pub type BoxError = Box<dyn Error + Send + Sync>;
 const PLAYLIST_LIMIT: usize = 256 * 1024;
@@ -31,6 +34,7 @@ fn validate_url(mut url: Url) -> Result<Url, BoxError> {
 pub fn open_stream(
     url: &Url,
     cancelled: impl Fn() -> bool,
+    on_track: impl FnMut(TrackInfo) + Send + 'static,
 ) -> Result<impl Read + Send + 'static, BoxError> {
     let agent: Agent = Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(8)))
@@ -47,7 +51,7 @@ pub fn open_stream(
         if cancelled() {
             return Err(io::Error::other("Wiedergabe abgebrochen").into());
         }
-        let response = agent.get(url.as_str()).call()?;
+        let response = agent.get(url.as_str()).header("icy-metadata", "1").call()?;
         if !response.status().is_success() {
             return Err(format!("HTTP {}", response.status()).into());
         }
@@ -58,13 +62,18 @@ pub fn open_stream(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         let declared_format = playlist_format(&base, mime).or_else(|| playlist_format(&url, ""));
+        let metadata_interval = response
+            .headers()
+            .get("icy-metaint")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<NonZeroUsize>().ok());
         let mut body = BufReader::new(response.into_body().into_reader());
         let format = match declared_format {
             Some(format) => Some(format),
             None => sniff_playlist(body.fill_buf()?),
         };
         let Some(format) = format else {
-            return Ok(body);
+            return Ok(IcyReader::new(body, metadata_interval, on_track));
         };
         if !allow_playlist {
             return Err("Der erste Playlist-Eintrag verweist auf eine weitere Playlist.".into());
