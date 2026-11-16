@@ -190,7 +190,11 @@ impl Radio {
             Event::Add => {
                 self.view.name.set_value("");
                 self.view.url.set_value("");
-                show_window(&mut self.view.add_window, self.settings.always_on_top);
+                show_dialog(
+                    &self.view.window,
+                    &mut self.view.add_window,
+                    self.settings.always_on_top,
+                );
                 let _ = self.view.name.take_focus();
             }
             Event::SaveStation => self.add_station(),
@@ -214,7 +218,11 @@ impl Radio {
                 self.save_at = Some(Instant::now() + Duration::from_millis(350));
             }
             Event::Timer => {
-                show_window(&mut self.view.timer_window, self.settings.always_on_top);
+                show_dialog(
+                    &self.view.window,
+                    &mut self.view.timer_window,
+                    self.settings.always_on_top,
+                );
                 let _ = self.view.minutes.take_focus();
             }
             Event::StartTimer(preset) => self.start_timer(preset),
@@ -227,10 +235,16 @@ impl Radio {
                 self.timer = None;
                 self.view.timer_window.hide();
             }
-            Event::Settings => {
-                show_window(&mut self.view.settings_window, self.settings.always_on_top)
-            }
-            Event::About => show_window(&mut self.view.about_window, self.settings.always_on_top),
+            Event::Settings => show_dialog(
+                &self.view.window,
+                &mut self.view.settings_window,
+                self.settings.always_on_top,
+            ),
+            Event::About => show_dialog(
+                &self.view.window,
+                &mut self.view.about_window,
+                self.settings.always_on_top,
+            ),
             Event::MinimizeToTray(value) => {
                 self.settings.minimize_to_tray = value;
                 self.save();
@@ -584,6 +598,14 @@ fn show_window(window: &mut Window, on_top: bool) {
     }
 }
 
+fn show_dialog(parent: &Window, dialog: &mut Window, on_top: bool) {
+    // FLTK positions and dimensions are in the same logical screen coordinates.
+    let x = parent.x() + (parent.w() - dialog.w()) / 2;
+    let y = parent.y() + (parent.h() - dialog.h()) / 2;
+    dialog.set_pos(x, y);
+    show_window(dialog, on_top);
+}
+
 fn timer_deadline(from: Instant, minutes: u64) -> Option<Instant> {
     if minutes == 0 {
         return None;
@@ -733,7 +755,6 @@ impl View {
 
         let mut add_window = Window::default()
             .with_size(475, 143)
-            .center_screen()
             .with_label("Sender hinzufügen");
         let name = Input::new(68, 14, 393, 28, "Name");
         let mut url = Input::new(68, 50, 393, 28, "URL");
@@ -745,7 +766,6 @@ impl View {
 
         let mut timer_window = Window::default()
             .with_size(342, 181)
-            .center_screen()
             .with_label("Sleeptimer");
         let mut preset_label = Frame::new(14, 10, 314, 20, "Starten für");
         preset_label.set_align(Align::Inside | Align::Left);
@@ -775,7 +795,6 @@ impl View {
 
         let mut settings_window = Window::default()
             .with_size(370, 182)
-            .center_screen()
             .with_label("Einstellungen");
         let mut minimize =
             CheckButton::new(12, 12, 345, 28, "Beim Minimieren in den Tray verschieben");
@@ -804,10 +823,7 @@ impl View {
         settings_window.make_modal(false);
         settings_window.set_callback(|window| window.hide());
 
-        let mut about_window = Window::default()
-            .with_size(260, 122)
-            .center_screen()
-            .with_label("About");
+        let mut about_window = Window::default().with_size(260, 122).with_label("About");
         Frame::new(
             12,
             15,

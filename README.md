@@ -10,7 +10,7 @@ Kleiner Webradio-Player in Rust mit FLTK für Windows und Linux.
 - Die Lautstärke lässt sich auch mit dem Mausrad über dem Regler ändern. Die horizontalen Balken **L** und **R** zeigen die Spitzenpegel mit einem Verlauf von Grün über Gelb zu Rot. Bei Mono zeigen beide denselben Pegel.
 - Sender lassen sich löschen, über den Stern als Favoriten markieren und nach Name oder URL suchen. Ein voller Stern kennzeichnet einen Favoriten. **Nur Favoriten** lässt sich mit der Suche kombinieren.
 - Das Uhrsymbol öffnet den **Sleeptimer**. Er stoppt die Wiedergabe nach 15, 30, 45 oder 60 Minuten oder nach einer frei eingegebenen Dauer. Einen laufenden Timer kannst du um 5, 10 oder 15 Minuten verlängern. Beim Schließen des Dialogs und im Tray läuft der Countdown weiter.
-- Unter **Einstellungen…** findest du **Immer im Vordergrund**, die Themes **Standard** und **Dunkel** sowie das Minimieren in den Tray. Theme-Wechsel werden sofort sichtbar. **Esc** blendet bei aktiver Tray-Option und verfügbarem Tray das Hauptfenster aus. Das Tray-Icon öffnet den Player wieder. Unter Linux braucht der Desktop eine StatusNotifierItem-kompatible Tray-Leiste und für **Immer im Vordergrund** einen Fenstermanager mit EWMH-Unterstützung.
+- Unter **Einstellungen…** findest du **Immer im Vordergrund**, die Themes **Standard** und **Dunkel** sowie das Minimieren in den Tray. Theme-Wechsel werden sofort sichtbar. **Esc** blendet bei aktiver Tray-Option und verfügbarem Tray das Hauptfenster aus. Ein Linksklick auf das Tray-Icon holt das Hauptfenster hervor. Ein Rechtsklick öffnet das Menü. Unter Linux braucht der Desktop eine StatusNotifierItem-kompatible Tray-Leiste und für **Immer im Vordergrund** einen Fenstermanager mit EWMH-Unterstützung.
 
 Der Player liest und speichert Sender und Favoriten in `stations.yaml` direkt neben der Programmdatei. Beim ersten Start ohne diese Datei übernimmt er vorhandene Sender aus `settings.json`. Zum Ändern der Senderliste muss der Programmordner beschreibbar sein. Die YAML-Datei kannst du mit der Programmdatei in einen anderen Ordner mitnehmen.
 
@@ -46,3 +46,7 @@ sudo apt install libasound2t64 libfontconfig1 libx11-6 libxcursor1 libxext6 libx
 chmod +x dist/linux/screacher-radio
 ./dist/linux/screacher-radio
 ```
+
+## Screenshots
+
+![Main Window](./screenshots/main_window.png "Main Window")
