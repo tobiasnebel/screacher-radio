@@ -11,13 +11,14 @@ use fltk::{
     button::{Button, CheckButton},
     dialog, draw,
     enums::{
-        Align, CallbackTrigger, Color, ColorDepth, Event as FltkEvent, Font, FrameType, Shortcut,
+        Align, CallbackReason, CallbackTrigger, Color, ColorDepth, Event as FltkEvent, Font,
+        FrameType, Shortcut,
     },
     frame::Frame,
     group::Group,
     image::RgbImage,
     input::{Input, IntInput},
-    menu::{MenuBar, MenuFlag},
+    menu::{Choice, MenuBar, MenuFlag},
     output::Output,
     prelude::*,
     valuator::{SliderType, ValueSlider},
@@ -28,9 +29,11 @@ use url::Url;
 use crate::{
     metadata::TrackInfo,
     playback::{Playback, PlaybackEvent},
-    settings::{self, Settings, Station},
+    settings::{self, Settings, Station, Theme},
     station::station_url,
+    theme::Palette,
     tray::{self, Tray},
+    window_order,
 };
 
 #[derive(Clone)]
@@ -38,6 +41,7 @@ pub enum Event {
     Quit,
     Show,
     Minimized,
+    Escape,
     #[cfg(target_os = "linux")]
     TrayAvailable(bool),
     Search,
@@ -56,6 +60,8 @@ pub enum Event {
     Settings,
     About,
     MinimizeToTray(bool),
+    AlwaysOnTop(bool),
+    ThemeChanged(Theme),
     Playback(u64, PlaybackEvent),
 }
 
@@ -101,7 +107,7 @@ pub fn run() {
     };
     radio.refresh_stations();
     radio.refresh_playback_buttons();
-    radio.view.window.show();
+    radio.show();
     let tray = Tray::new(messages);
     radio.set_tray_available(tray.is_some());
     if let Some(error) = warning {
@@ -161,14 +167,12 @@ impl Radio {
         match event {
             Event::Quit => unreachable!(),
             Event::Show => self.show(),
-            Event::Minimized if self.settings.minimize_to_tray && self.tray_available => {
+            Event::Minimized => {
                 if self.view.window.shown() && !self.view.window.visible() {
-                    self.view.timer_window.hide();
-                    self.view.window.hide();
-                    self.hidden_in_tray = true;
+                    self.hide_to_tray();
                 }
             }
-            Event::Minimized => {}
+            Event::Escape => self.hide_to_tray(),
             #[cfg(target_os = "linux")]
             Event::TrayAvailable(available) => self.set_tray_available(available),
             Event::Search => self.refresh_stations(),
@@ -186,7 +190,7 @@ impl Radio {
             Event::Add => {
                 self.view.name.set_value("");
                 self.view.url.set_value("");
-                self.view.add_window.show();
+                show_window(&mut self.view.add_window, self.settings.always_on_top);
                 let _ = self.view.name.take_focus();
             }
             Event::SaveStation => self.add_station(),
@@ -210,7 +214,7 @@ impl Radio {
                 self.save_at = Some(Instant::now() + Duration::from_millis(350));
             }
             Event::Timer => {
-                self.view.timer_window.show();
+                show_window(&mut self.view.timer_window, self.settings.always_on_top);
                 let _ = self.view.minutes.take_focus();
             }
             Event::StartTimer(preset) => self.start_timer(preset),
@@ -223,10 +227,22 @@ impl Radio {
                 self.timer = None;
                 self.view.timer_window.hide();
             }
-            Event::Settings => self.view.settings_window.show(),
-            Event::About => self.view.about_window.show(),
+            Event::Settings => {
+                show_window(&mut self.view.settings_window, self.settings.always_on_top)
+            }
+            Event::About => show_window(&mut self.view.about_window, self.settings.always_on_top),
             Event::MinimizeToTray(value) => {
                 self.settings.minimize_to_tray = value;
+                self.save();
+            }
+            Event::AlwaysOnTop(value) => {
+                self.settings.always_on_top = value;
+                self.view.set_on_top(value);
+                self.save();
+            }
+            Event::ThemeChanged(theme) => {
+                self.settings.theme = theme;
+                self.view.apply_theme(theme);
                 self.save();
             }
             Event::Playback(id, state) if id == self.playback_id => self.playback_event(state),
@@ -236,7 +252,16 @@ impl Radio {
 
     fn show(&mut self) {
         self.hidden_in_tray = false;
-        self.view.window.show();
+        show_window(&mut self.view.window, self.settings.always_on_top);
+    }
+
+    fn hide_to_tray(&mut self) {
+        if self.settings.minimize_to_tray && self.tray_available && self.view.window.shown() {
+            self.view.timer_window.hide();
+            self.view.settings_window.hide();
+            self.view.window.hide();
+            self.hidden_in_tray = true;
+        }
     }
 
     fn set_tray_available(&mut self, available: bool) {
@@ -296,16 +321,19 @@ impl Radio {
         if let Some(index) = self.selected_visible() {
             let station = &self.stations[index];
             self.view.list.set_tooltip(station.url.as_str());
-            self.view.favorite.set_label(if station.favorite {
-                "Favorit entfernen"
+            let (icon, tooltip) = if station.favorite {
+                ("@radio_star", "Favorit entfernen")
             } else {
-                "Als Favorit"
-            });
+                ("@radio_star_outline", "Als Favorit markieren")
+            };
+            self.view.favorite.set_label(icon);
+            self.view.favorite.set_tooltip(tooltip);
             self.view.favorite.activate();
             self.view.remove.activate();
         } else {
             self.view.list.set_tooltip("");
-            self.view.favorite.set_label("Als Favorit");
+            self.view.favorite.set_label("@radio_star_outline");
+            self.view.favorite.set_tooltip("Als Favorit markieren");
             self.view.favorite.deactivate();
             self.view.remove.deactivate();
         }
@@ -549,6 +577,13 @@ impl Radio {
     }
 }
 
+fn show_window(window: &mut Window, on_top: bool) {
+    window.show();
+    if on_top {
+        window_order::set_on_top(window, true);
+    }
+}
+
 fn timer_deadline(from: Instant, minutes: u64) -> Option<Instant> {
     if minutes == 0 {
         return None;
@@ -564,6 +599,7 @@ const TIMER_ICON: &str = "@radio_clock";
 
 struct View {
     window: Window,
+    palette: Palette,
     search: Input,
     favorites: CheckButton,
     list: HoldBrowser,
@@ -592,10 +628,15 @@ struct View {
 
 impl View {
     fn new(messages: Sender<Event>, settings: &Settings) -> Self {
+        let palette = Palette::current();
         app::add_symbol("radio_clock", true, draw_clock).expect("register clock symbol");
         app::add_symbol("radio_speaker", true, draw_speaker).expect("register speaker symbol");
         app::add_symbol("radio_play", true, draw_play).expect("register play symbol");
         app::add_symbol("radio_stop", true, draw_stop).expect("register stop symbol");
+        app::add_symbol("radio_star", true, |color| draw_star(color, true))
+            .expect("register star symbol");
+        app::add_symbol("radio_star_outline", true, |color| draw_star(color, false))
+            .expect("register outline star symbol");
         let mut window = Window::default()
             .with_size(600, 452)
             .center_screen()
@@ -633,7 +674,7 @@ impl View {
         add.emit(messages, Event::Add);
         let mut remove = Button::new(138, 305, 100, 28, "Löschen…");
         remove.emit(messages, Event::Remove);
-        let mut favorite = Button::new(246, 305, 133, 28, "Als Favorit");
+        let mut favorite = Button::new(246, 305, 38, 28, "@radio_star_outline");
         favorite.emit(messages, Event::Favorite);
         let mut play = Button::new(12, 344, 76, 28, "@radio_play");
         play.set_tooltip("Wiedergabe starten");
@@ -674,7 +715,12 @@ impl View {
         window.end();
         window.resizable(&station_area);
         window.size_range(600, 452, 0, 0);
-        window.emit(messages, Event::Quit);
+        window.set_callback(move |_| {
+            messages.send(match app::callback_reason() {
+                CallbackReason::Cancelled => Event::Escape,
+                _ => Event::Quit,
+            });
+        });
         window.handle(move |_, event| {
             if event == FltkEvent::Hide {
                 messages.send(Event::Minimized);
@@ -728,7 +774,7 @@ impl View {
         timer_window.set_callback(|window| window.hide());
 
         let mut settings_window = Window::default()
-            .with_size(370, 112)
+            .with_size(370, 182)
             .center_screen()
             .with_label("Einstellungen");
         let mut minimize =
@@ -737,11 +783,26 @@ impl View {
         minimize.set_callback(move |button| messages.send(Event::MinimizeToTray(button.value())));
         let mut tray_note = Frame::new(14, 44, 342, 20, None);
         tray_note.set_align(Align::Inside | Align::Left);
-        let mut close = Button::new(255, 72, 101, 28, "Schließen");
+        let mut on_top = CheckButton::new(12, 67, 344, 26, "Immer im Vordergrund");
+        on_top.set_value(settings.always_on_top);
+        on_top.set_callback(move |button| messages.send(Event::AlwaysOnTop(button.value())));
+        let mut theme = Choice::new(68, 104, 154, 28, "Theme");
+        theme.add_choice("Standard|Dunkel");
+        theme.set_value(i32::from(settings.theme == Theme::Dark));
+        theme.set_callback(move |choice| {
+            let theme = if choice.value() == 1 {
+                Theme::Dark
+            } else {
+                Theme::Standard
+            };
+            messages.send(Event::ThemeChanged(theme));
+        });
+        let mut close = Button::new(255, 143, 101, 28, "Schließen");
         let mut settings_dialog = settings_window.clone();
         close.set_callback(move |_| settings_dialog.hide());
         settings_window.end();
-        settings_window.make_modal(true);
+        settings_window.make_modal(false);
+        settings_window.set_callback(|window| window.hide());
 
         let mut about_window = Window::default()
             .with_size(260, 122)
@@ -760,8 +821,9 @@ impl View {
         about_window.end();
         about_window.make_modal(true);
 
-        Self {
+        let mut view = Self {
             window,
+            palette,
             search,
             favorites,
             list,
@@ -786,7 +848,34 @@ impl View {
             minimize,
             tray_note,
             about_window,
+        };
+        if settings.theme != Theme::Standard {
+            view.apply_theme(settings.theme);
         }
+        view
+    }
+
+    fn set_on_top(&self, enabled: bool) {
+        for window in [
+            &self.window,
+            &self.timer_window,
+            &self.settings_window,
+            &self.add_window,
+            &self.about_window,
+        ] {
+            window_order::set_on_top(window, enabled);
+        }
+    }
+
+    fn apply_theme(&mut self, theme: Theme) {
+        self.palette.apply(theme);
+        self.empty.set_label_color(if theme == Theme::Dark {
+            Color::Foreground
+        } else {
+            Color::Dark3
+        });
+        self.meter.set_theme(theme);
+        app::redraw();
     }
 
     fn status(&mut self, status: &str) {
@@ -906,6 +995,25 @@ fn draw_stop(color: Color) {
     draw::end_polygon();
 }
 
+fn draw_star(color: Color, filled: bool) {
+    draw::set_draw_color(color);
+    if filled {
+        draw::begin_complex_polygon();
+    } else {
+        draw::begin_loop();
+    }
+    for point in 0..10 {
+        let angle = f64::from(point) * std::f64::consts::PI / 5.0;
+        let radius = if point % 2 == 0 { 0.8 } else { 0.37 };
+        draw::vertex(radius * angle.sin(), -radius * angle.cos());
+    }
+    if filled {
+        draw::end_complex_polygon();
+    } else {
+        draw::end_loop();
+    }
+}
+
 fn draw_clock(color: Color) {
     draw::set_draw_color(color);
     draw::begin_line();
@@ -942,6 +1050,7 @@ fn draw_speaker(color: Color) {
 struct StereoMeter {
     frame: Frame,
     segments: Rc<Cell<[i32; 2]>>,
+    inactive_color: Rc<Cell<Color>>,
 }
 
 impl StereoMeter {
@@ -954,6 +1063,8 @@ impl StereoMeter {
         frame.set_tooltip("Stereo-Spitzenpegel nach Lautstärke (−48 bis 0 dBFS)");
         let segments = Rc::new(Cell::new([0, 0]));
         let visible_segments = segments.clone();
+        let inactive_color = Rc::new(Cell::new(Color::from_rgb(214, 220, 222)));
+        let unlit = inactive_color.clone();
         let green = Color::from_rgb(49, 138, 87);
         let yellow = Color::from_rgb(224, 178, 28);
         let red = Color::from_rgb(194, 62, 51);
@@ -975,7 +1086,7 @@ impl StereoMeter {
                     let start = frame.x() + segment * frame.w() / Self::SEGMENTS as i32;
                     let end = frame.x() + (segment + 1) * frame.w() / Self::SEGMENTS as i32;
                     let color = if segment >= active_segments {
-                        Color::from_rgb(214, 220, 222)
+                        unlit.get()
                     } else {
                         color
                     };
@@ -983,7 +1094,18 @@ impl StereoMeter {
                 }
             }
         });
-        Self { frame, segments }
+        Self {
+            frame,
+            segments,
+            inactive_color,
+        }
+    }
+
+    fn set_theme(&mut self, theme: Theme) {
+        self.inactive_color.set(match theme {
+            Theme::Standard => Color::from_rgb(214, 220, 222),
+            Theme::Dark => Color::from_rgb(58, 68, 63),
+        });
     }
 
     fn set_levels(&mut self, levels: [u8; 2]) {

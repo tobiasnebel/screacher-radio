@@ -4,8 +4,10 @@ mod metadata;
 mod playback;
 mod settings;
 mod station;
+mod theme;
 mod tray;
 mod ui;
+mod window_order;
 
 fn main() {
     ui::run();

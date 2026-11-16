@@ -18,6 +18,14 @@ pub struct Station {
     pub favorite: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Theme {
+    #[default]
+    Standard,
+    Dark,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct Settings {
@@ -26,6 +34,8 @@ pub struct Settings {
     pub last_station: Option<Url>,
     pub volume: u8,
     pub minimize_to_tray: bool,
+    pub always_on_top: bool,
+    pub theme: Theme,
 }
 
 impl Default for Settings {
@@ -35,6 +45,8 @@ impl Default for Settings {
             last_station: None,
             volume: 75,
             minimize_to_tray: false,
+            always_on_top: false,
+            theme: Theme::Standard,
         }
     }
 }
@@ -142,6 +154,20 @@ fn write_atomic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn defaults_and_persists_window_preferences() {
+        let mut settings: Settings = serde_json::from_str(r#"{"volume":60}"#).unwrap();
+        assert_eq!(settings.theme, Theme::Standard);
+        assert!(!settings.always_on_top);
+
+        settings.theme = Theme::Dark;
+        settings.always_on_top = true;
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.theme, Theme::Dark);
+        assert!(restored.always_on_top);
+    }
 
     #[test]
     fn migrates_and_round_trips_stations_without_reviving_deleted_entries() {
