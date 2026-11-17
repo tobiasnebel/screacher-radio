@@ -9,7 +9,7 @@ use std::{
 };
 
 use fltk::app::Sender;
-use rodio::{Decoder, OutputStreamBuilder, Sink, Source};
+use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source, StreamError};
 use rtrb::{Consumer, RingBuffer};
 use url::Url;
 
@@ -19,6 +19,11 @@ use crate::{
     station::{self, BoxError},
     ui::Event,
 };
+
+#[cfg(windows)]
+mod windows_output;
+#[cfg(windows)]
+use windows_output::AudioOutput;
 
 #[derive(Clone)]
 pub enum PlaybackEvent {
@@ -125,22 +130,9 @@ fn play(
     opening.store(false, Ordering::Relaxed);
 
     // Only the decoder thread reads from the network. The audio callback uses a bounded queue.
-    let output_failed = Arc::new(AtomicBool::new(false));
-    let report_output_error = output_failed.clone();
-    let mut output = OutputStreamBuilder::from_default_device()
-        .and_then(|builder| {
-            builder
-                .with_error_callback(move |_| {
-                    report_output_error.store(true, Ordering::Relaxed);
-                })
-                .open_stream_or_fallback()
-        })
-        .map_err(|error| (texts.audio_open_failed)(&error.to_string()))?;
-    output.log_on_drop(false);
-    let sink = Sink::connect_new(output.mixer());
     let ended = Arc::new(AtomicBool::new(false));
     producer.push_entire_slice(&buffer[..initial - initial % frame_len])?;
-    sink.append(RadioSource {
+    let mut output = AudioOutput::open(RadioSource {
         samples: consumer,
         volume,
         meter: PeakMeter::new(levels, rate),
@@ -150,14 +142,15 @@ fn play(
         rate,
         frame_remaining: 0,
         silent_frame: false,
-    });
+    })
+    .map_err(|error| (texts.audio_open_failed)(&error.to_string()))?;
     notify(PlaybackEvent::Started(Instant::now()));
 
-    let is_running = || !is_cancelled() && !output_failed.load(Ordering::Relaxed);
-    while is_running() {
+    while !is_cancelled() {
+        output.ready(texts)?;
         let count = decode_block(&mut decoder, &mut buffer);
         let mut remaining = &buffer[..count - count % frame_len];
-        while !remaining.is_empty() && is_running() {
+        while !remaining.is_empty() && !is_cancelled() && output.ready(texts)? {
             let writable = producer.slots();
             let len = remaining.len().min(writable - writable % frame_len);
             if len == 0 {
@@ -172,13 +165,59 @@ fn play(
         }
     }
     ended.store(true, Ordering::Release);
-    while is_running() && !sink.empty() {
+    while !is_cancelled() && output.ready(texts)? && !output.drained() {
         thread::sleep(Duration::from_millis(15));
     }
-    if output_failed.load(Ordering::Relaxed) {
-        return Err(texts.audio_device_lost.into());
-    }
     Ok(())
+}
+
+struct ActiveOutput {
+    sink: Sink,
+    _stream: OutputStream,
+    failed: Arc<AtomicBool>,
+}
+
+impl ActiveOutput {
+    fn open() -> Result<Self, StreamError> {
+        let failed = Arc::new(AtomicBool::new(false));
+        let report_error = failed.clone();
+        let mut stream = OutputStreamBuilder::from_default_device()?
+            .with_error_callback(move |_| report_error.store(true, Ordering::Relaxed))
+            .open_stream_or_fallback()?;
+        stream.log_on_drop(false);
+        Ok(Self {
+            sink: Sink::connect_new(stream.mixer()),
+            _stream: stream,
+            failed,
+        })
+    }
+
+    fn failed(&self) -> bool {
+        self.failed.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(not(windows))]
+struct AudioOutput(ActiveOutput);
+
+#[cfg(not(windows))]
+impl AudioOutput {
+    fn open(source: RadioSource) -> Result<Self, StreamError> {
+        let output = ActiveOutput::open()?;
+        output.sink.append(source);
+        Ok(Self(output))
+    }
+
+    fn ready(&mut self, texts: &Texts) -> Result<bool, &'static str> {
+        if self.0.failed() {
+            return Err(texts.audio_device_lost);
+        }
+        Ok(true)
+    }
+
+    fn drained(&self) -> bool {
+        self.0.sink.empty()
+    }
 }
 
 fn decode_stream<R: Read + Send + 'static>(

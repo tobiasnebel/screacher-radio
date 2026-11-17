@@ -69,6 +69,7 @@ pub(super) static TEXTS: Texts = Texts {
     hls_unsupported: "HLS playlists are not supported.",
     playlist_empty: "The playlist contains no stream.",
     empty_audio: "The MP3 stream contains no audio data.",
+    #[cfg(not(windows))]
     audio_device_lost: "Connection to the audio output device was lost.",
     opening_timeout: "Stream startup timed out",
     settings_load_failed: |error| {
