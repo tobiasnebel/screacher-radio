@@ -136,8 +136,8 @@ pub struct Texts {
     pub hls_unsupported: &'static str,
     pub playlist_empty: &'static str,
     pub empty_audio: &'static str,
-    #[cfg(not(windows))]
-    pub audio_device_lost: &'static str,
+    pub audio_device: &'static str,
+    pub default_audio_device: &'static str,
     pub opening_timeout: &'static str,
     pub settings_load_failed: fn(&str) -> String,
     pub stations_load_failed: fn(&str) -> String,

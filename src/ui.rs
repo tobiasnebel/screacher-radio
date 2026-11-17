@@ -29,7 +29,7 @@ use crate::{
     i18n::{Language, Texts},
     icon,
     metadata::TrackInfo,
-    playback::{Playback, PlaybackEvent},
+    playback::{OutputDevice, Playback, PlaybackEvent, output_devices},
     settings::{self, Settings, Station, Theme},
     station::station_url,
     theme::Palette,
@@ -64,6 +64,7 @@ pub enum Event {
     AlwaysOnTop(bool),
     ThemeChanged(Theme),
     LanguageChanged(Language),
+    SelectAudioDevice(i32),
     Playback(u64, PlaybackEvent),
 }
 
@@ -107,6 +108,7 @@ pub fn run() {
         save_at: None,
         tray_available: false,
         tray_position: None,
+        next_device_check: Instant::now(),
     };
     radio.refresh_stations();
     radio.refresh_playback_buttons();
@@ -159,6 +161,7 @@ struct Radio {
     save_at: Option<Instant>,
     tray_available: bool,
     tray_position: Option<(i32, i32, i32)>,
+    next_device_check: Instant,
 }
 
 impl Radio {
@@ -234,11 +237,14 @@ impl Radio {
                 self.timer = None;
                 self.view.timer_window.hide();
             }
-            Event::Settings => show_dialog(
-                &self.view.window,
-                &mut self.view.settings_window,
-                self.settings.always_on_top,
-            ),
+            Event::Settings => {
+                self.refresh_audio_devices(Instant::now());
+                show_dialog(
+                    &self.view.window,
+                    &mut self.view.settings_window,
+                    self.settings.always_on_top,
+                );
+            }
             Event::About => show_dialog(
                 &self.view.window,
                 &mut self.view.about_window,
@@ -262,8 +268,44 @@ impl Radio {
                 self.settings.language = language;
                 self.save();
             }
+            Event::SelectAudioDevice(0) => self.set_audio_device(None),
+            Event::SelectAudioDevice(index) => {
+                if index > 0
+                    && let Some(device) = self.view.audio_devices.get((index - 1) as usize)
+                {
+                    self.set_audio_device(Some(device.id.clone()));
+                }
+            }
             Event::Playback(id, state) if id == self.playback_id => self.playback_event(state),
             Event::Playback(..) => {}
+        }
+    }
+
+    fn refresh_audio_devices(&mut self, now: Instant) {
+        self.next_device_check = now + Duration::from_secs(1);
+        if app::grab().is_some() {
+            return;
+        }
+        if let Ok(devices) = output_devices() {
+            if let Some(preferred) = &self.settings.audio_device
+                && !devices.iter().any(|device| &device.id == preferred)
+            {
+                self.set_audio_device(None);
+            }
+            self.view
+                .set_audio_devices(devices, self.settings.audio_device.as_deref());
+        }
+    }
+
+    fn set_audio_device(&mut self, device: Option<String>) {
+        if self.settings.audio_device != device {
+            if let Some(playing) = &self.playing {
+                playing.playback.set_output_device(device.clone());
+            }
+            self.settings.audio_device = device;
+            self.view
+                .select_audio_device(self.settings.audio_device.as_deref());
+            self.save();
         }
     }
 
@@ -491,6 +533,7 @@ impl Radio {
             self.playback_id,
             self.messages,
             self.view.texts,
+            self.settings.audio_device.clone(),
         ) {
             Ok(playback) => {
                 self.view.status(&(self.view.texts.connecting)(&name));
@@ -529,6 +572,11 @@ impl Radio {
                 self.save();
             }
             PlaybackEvent::TrackChanged(track) => self.view.stream_info.set_track(&track),
+            PlaybackEvent::AudioDeviceUnavailable(device) => {
+                if self.settings.audio_device.as_ref() == Some(&device) {
+                    self.set_audio_device(None);
+                }
+            }
             PlaybackEvent::Ended => self.stop(self.view.texts.stream_ended),
             PlaybackEvent::Failed(error) => {
                 let status = (self.view.texts.station_error)(&playing.name, &error);
@@ -551,6 +599,14 @@ impl Radio {
 
     fn update(&mut self, now: Instant) -> f64 {
         let mut wait: f64 = 3600.0;
+        if self.view.settings_window.visible()
+            || (self.playing.is_none() && self.settings.audio_device.is_some())
+        {
+            if now >= self.next_device_check {
+                self.refresh_audio_devices(now);
+            }
+            wait = wait.min(self.next_device_check.duration_since(now).as_secs_f64());
+        }
         if self.view.window.visible()
             && let Some(playing) = &mut self.playing
             && let Some(due) = &mut playing.meter_due
@@ -653,6 +709,8 @@ struct View {
     extend_buttons: [Button; 3],
     timer_seconds: Option<u64>,
     settings_window: Window,
+    audio_device: Choice,
+    audio_devices: Vec<OutputDevice>,
     minimize: CheckButton,
     tray_note: Frame,
     about_window: Window,
@@ -812,7 +870,7 @@ impl View {
         timer_window.set_callback(|window| window.hide());
 
         let mut settings_window = Window::default()
-            .with_size(370, 235)
+            .with_size(465, 288)
             .with_label(texts.settings);
         let mut minimize = CheckButton::new(12, 12, 345, 28, texts.minimize_to_tray);
         minimize.set_value(settings.minimize_to_tray);
@@ -847,7 +905,12 @@ impl View {
         });
         let mut restart = Frame::new(14, 175, 342, 20, texts.restart_language);
         restart.set_align(Align::Inside | Align::Left);
-        let mut close = Button::new(255, 196, 101, 28, texts.close);
+        let mut audio_device = Choice::new(154, 205, 297, 28, texts.audio_device);
+        audio_device.add_choice(texts.default_audio_device);
+        audio_device.set_value(0);
+        audio_device
+            .set_callback(move |choice| messages.send(Event::SelectAudioDevice(choice.value())));
+        let mut close = Button::new(350, 249, 101, 28, texts.close);
         let mut settings_dialog = settings_window.clone();
         close.set_callback(move |_| settings_dialog.hide());
         settings_window.end();
@@ -896,6 +959,8 @@ impl View {
             extend_buttons,
             timer_seconds: None,
             settings_window,
+            audio_device,
+            audio_devices: Vec::new(),
             minimize,
             tray_note,
             about_window,
@@ -904,6 +969,48 @@ impl View {
             view.apply_theme(settings.theme);
         }
         view
+    }
+
+    fn set_audio_devices(&mut self, devices: Vec<OutputDevice>, preferred: Option<&str>) {
+        if self.audio_devices != devices {
+            self.audio_device.clear();
+            self.audio_device
+                .add_choice(self.texts.default_audio_device);
+            for (index, device) in devices.iter().enumerate() {
+                let label = if device.label == self.texts.default_audio_device
+                    || devices
+                        .get(index.wrapping_sub(1))
+                        .is_some_and(|previous| previous.label == device.label)
+                    || devices
+                        .get(index + 1)
+                        .is_some_and(|next| next.label == device.label)
+                {
+                    format!("{} ({})", device.label, index + 1)
+                } else {
+                    device.label.clone()
+                };
+                // FLTK treats these characters as menu syntax.
+                let mut label = label
+                    .replace('\\', "\\\\")
+                    .replace('/', "\\/")
+                    .replace('&', "&&")
+                    .replace('|', "｜")
+                    .replace(['\r', '\n', '\t'], " ");
+                if label.starts_with('_') {
+                    label.insert(0, '\\');
+                }
+                self.audio_device.add_choice(&label);
+            }
+            self.audio_devices = devices;
+        }
+        self.select_audio_device(preferred);
+    }
+
+    fn select_audio_device(&mut self, preferred: Option<&str>) {
+        let index = preferred
+            .and_then(|id| self.audio_devices.iter().position(|device| device.id == id))
+            .map_or(0, |index| (index + 1) as i32);
+        self.audio_device.set_value(index);
     }
 
     fn set_on_top(&self, enabled: bool) {

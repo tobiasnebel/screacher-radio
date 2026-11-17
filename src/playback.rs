@@ -3,13 +3,14 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering},
+        mpsc::{self, Receiver, Sender as DeviceSender},
     },
     thread,
     time::{Duration, Instant},
 };
 
 use fltk::app::Sender;
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source, StreamError};
+use rodio::{ChannelCount, Decoder, SampleRate, Source};
 use rtrb::{Consumer, RingBuffer};
 use url::Url;
 
@@ -20,15 +21,17 @@ use crate::{
     ui::Event,
 };
 
+mod output;
 #[cfg(windows)]
 mod windows_output;
-#[cfg(windows)]
-use windows_output::AudioOutput;
+use output::AudioOutput;
+pub use output::{OutputDevice, output_devices};
 
 #[derive(Clone)]
 pub enum PlaybackEvent {
     Started(Instant),
     TrackChanged(TrackInfo),
+    AudioDeviceUnavailable(String),
     Ended,
     Failed(String),
 }
@@ -37,6 +40,7 @@ pub struct Playback {
     cancelled: Arc<AtomicBool>,
     volume: Arc<AtomicU8>,
     levels: Arc<AtomicU16>,
+    output_device: DeviceSender<Option<String>>,
 }
 
 impl Playback {
@@ -46,11 +50,14 @@ impl Playback {
         id: u64,
         messages: Sender<Event>,
         texts: &'static Texts,
+        preferred_device: Option<String>,
     ) -> io::Result<Self> {
+        let (output_device, selections) = mpsc::channel();
         let playback = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             volume: Arc::new(AtomicU8::new(volume)),
             levels: Arc::new(AtomicU16::new(0)),
+            output_device,
         };
         let cancelled = playback.cancelled.clone();
         let volume = playback.volume.clone();
@@ -58,9 +65,15 @@ impl Playback {
         thread::Builder::new()
             .name("radio-playback".into())
             .spawn(move || {
-                let result = play(&url, volume, levels, &cancelled, texts, move |event| {
-                    messages.send(Event::Playback(id, event));
-                });
+                let result = play(
+                    &url,
+                    volume,
+                    levels,
+                    &cancelled,
+                    texts,
+                    (preferred_device, selections),
+                    move |event| messages.send(Event::Playback(id, event)),
+                );
                 if !cancelled.load(Ordering::Relaxed) {
                     let event = match result {
                         Ok(()) => PlaybackEvent::Ended,
@@ -74,6 +87,10 @@ impl Playback {
 
     pub fn set_volume(&self, volume: u8) {
         self.volume.store(volume, Ordering::Relaxed);
+    }
+
+    pub fn set_output_device(&self, device: Option<String>) {
+        let _ = self.output_device.send(device);
     }
 
     pub fn stereo_levels(&self) -> [u8; 2] {
@@ -93,6 +110,7 @@ fn play(
     levels: Arc<AtomicU16>,
     cancelled: &Arc<AtomicBool>,
     texts: &Texts,
+    (preferred, selections): (Option<String>, Receiver<Option<String>>),
     notify: impl Fn(PlaybackEvent) + Clone + Send + 'static,
 ) -> Result<(), BoxError> {
     let opening_deadline = Instant::now() + Duration::from_secs(25);
@@ -116,8 +134,8 @@ fn play(
         decode_stream(input).map_err(|error| (texts.mp3_open_failed)(&error.to_string()))?;
     let channels = decoder.channels();
     let rate = decoder.sample_rate();
-    let frame_len = usize::from(channels);
-    let capacity = frame_len * rate as usize / 2;
+    let frame_len = usize::from(channels.get());
+    let capacity = frame_len * rate.get() as usize / 2;
     let (mut producer, consumer) = RingBuffer::new(capacity);
     let mut buffer = vec![0.0; 1152 * frame_len];
     let initial = decode_block(&mut decoder, &mut buffer);
@@ -132,25 +150,26 @@ fn play(
     // Only the decoder thread reads from the network. The audio callback uses a bounded queue.
     let ended = Arc::new(AtomicBool::new(false));
     producer.push_entire_slice(&buffer[..initial - initial % frame_len])?;
-    let mut output = AudioOutput::open(RadioSource {
+    let source = RadioSource {
         samples: consumer,
         volume,
-        meter: PeakMeter::new(levels, rate),
+        meter: PeakMeter::new(levels, rate.get()),
         cancelled: cancelled.clone(),
         ended: ended.clone(),
         channels,
         rate,
         frame_remaining: 0,
         silent_frame: false,
-    })
-    .map_err(|error| (texts.audio_open_failed)(&error.to_string()))?;
+    };
+    let mut output = AudioOutput::open(source, preferred, selections, &notify)
+        .map_err(|error| (texts.audio_open_failed)(&error.to_string()))?;
     notify(PlaybackEvent::Started(Instant::now()));
 
     while !is_cancelled() {
-        output.ready(texts)?;
+        output.ready(&notify);
         let count = decode_block(&mut decoder, &mut buffer);
         let mut remaining = &buffer[..count - count % frame_len];
-        while !remaining.is_empty() && !is_cancelled() && output.ready(texts)? {
+        while !remaining.is_empty() && !is_cancelled() && output.ready(&notify) {
             let writable = producer.slots();
             let len = remaining.len().min(writable - writable % frame_len);
             if len == 0 {
@@ -165,59 +184,10 @@ fn play(
         }
     }
     ended.store(true, Ordering::Release);
-    while !is_cancelled() && output.ready(texts)? && !output.drained() {
+    while !is_cancelled() && output.ready(&notify) && !output.drained() {
         thread::sleep(Duration::from_millis(15));
     }
     Ok(())
-}
-
-struct ActiveOutput {
-    sink: Sink,
-    _stream: OutputStream,
-    failed: Arc<AtomicBool>,
-}
-
-impl ActiveOutput {
-    fn open() -> Result<Self, StreamError> {
-        let failed = Arc::new(AtomicBool::new(false));
-        let report_error = failed.clone();
-        let mut stream = OutputStreamBuilder::from_default_device()?
-            .with_error_callback(move |_| report_error.store(true, Ordering::Relaxed))
-            .open_stream_or_fallback()?;
-        stream.log_on_drop(false);
-        Ok(Self {
-            sink: Sink::connect_new(stream.mixer()),
-            _stream: stream,
-            failed,
-        })
-    }
-
-    fn failed(&self) -> bool {
-        self.failed.load(Ordering::Relaxed)
-    }
-}
-
-#[cfg(not(windows))]
-struct AudioOutput(ActiveOutput);
-
-#[cfg(not(windows))]
-impl AudioOutput {
-    fn open(source: RadioSource) -> Result<Self, StreamError> {
-        let output = ActiveOutput::open()?;
-        output.sink.append(source);
-        Ok(Self(output))
-    }
-
-    fn ready(&mut self, texts: &Texts) -> Result<bool, &'static str> {
-        if self.0.failed() {
-            return Err(texts.audio_device_lost);
-        }
-        Ok(true)
-    }
-
-    fn drained(&self) -> bool {
-        self.0.sink.empty()
-    }
 }
 
 fn decode_stream<R: Read + Send + 'static>(
@@ -276,8 +246,8 @@ struct RadioSource {
     meter: PeakMeter,
     cancelled: Arc<AtomicBool>,
     ended: Arc<AtomicBool>,
-    channels: u16,
-    rate: u32,
+    channels: ChannelCount,
+    rate: SampleRate,
     frame_remaining: u16,
     silent_frame: bool,
 }
@@ -291,11 +261,11 @@ impl Iterator for RadioSource {
         }
         if self.frame_remaining == 0 {
             let ended = self.ended.load(Ordering::Acquire);
-            self.silent_frame = self.samples.slots() < usize::from(self.channels);
+            self.silent_frame = self.samples.slots() < usize::from(self.channels.get());
             if self.silent_frame && ended {
                 return None;
             }
-            self.frame_remaining = self.channels;
+            self.frame_remaining = self.channels.get();
         }
         self.frame_remaining -= 1;
         let sample = if self.silent_frame {
@@ -304,8 +274,8 @@ impl Iterator for RadioSource {
             let volume = f32::from(self.volume.load(Ordering::Relaxed)) / 100.0;
             self.samples.pop().ok()? * volume
         };
-        let channel = self.channels - self.frame_remaining - 1;
-        self.meter.record(sample, channel, self.channels);
+        let channel = self.channels.get() - self.frame_remaining - 1;
+        self.meter.record(sample, channel, self.channels.get());
         Some(sample)
     }
 }
@@ -314,10 +284,10 @@ impl Source for RadioSource {
     fn current_span_len(&self) -> Option<usize> {
         None
     }
-    fn channels(&self) -> u16 {
+    fn channels(&self) -> ChannelCount {
         self.channels
     }
-    fn sample_rate(&self) -> u32 {
+    fn sample_rate(&self) -> SampleRate {
         self.rate
     }
     fn total_duration(&self) -> Option<Duration> {
@@ -393,8 +363,8 @@ mod tests {
                 meter: PeakMeter::new(levels.clone(), 40),
                 cancelled: Arc::new(AtomicBool::new(false)),
                 ended: Arc::new(AtomicBool::new(false)),
-                channels,
-                rate: 40,
+                channels: ChannelCount::new(channels).unwrap(),
+                rate: SampleRate::new(40).unwrap(),
                 frame_remaining: 0,
                 silent_frame: false,
             };
@@ -470,8 +440,8 @@ mod tests {
             timeout_message: texts.opening_timeout,
         })
         .unwrap();
-        assert_eq!(decoder.sample_rate(), 44_100);
-        assert_eq!(decoder.channels(), 2);
+        assert_eq!(decoder.sample_rate().get(), 44_100);
+        assert_eq!(decoder.channels().get(), 2);
         assert_eq!(decoder.by_ref().take(4096).count(), 4096);
         assert_eq!(
             received.try_recv().unwrap(),

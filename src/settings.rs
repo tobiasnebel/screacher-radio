@@ -40,6 +40,7 @@ pub struct Settings {
     pub always_on_top: bool,
     pub theme: Theme,
     pub language: Language,
+    pub audio_device: Option<String>,
 }
 
 impl Default for Settings {
@@ -52,6 +53,7 @@ impl Default for Settings {
             always_on_top: false,
             theme: Theme::Standard,
             language: Language::default(),
+            audio_device: None,
         }
     }
 }
@@ -165,15 +167,18 @@ mod tests {
         let mut settings: Settings = serde_json::from_str(r#"{"volume":60}"#).unwrap();
         assert_eq!(settings.theme, Theme::Standard);
         assert_eq!(settings.language, Language::English);
+        assert_eq!(settings.audio_device, None);
         assert!(!settings.always_on_top);
 
         settings.theme = Theme::Dark;
         settings.language = Language::German;
+        settings.audio_device = Some("wasapi:test-device".into());
         settings.always_on_top = true;
         let json = serde_json::to_string(&settings).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.theme, Theme::Dark);
         assert_eq!(restored.language, Language::German);
+        assert_eq!(restored.audio_device.as_deref(), Some("wasapi:test-device"));
         assert!(restored.always_on_top);
     }
 
