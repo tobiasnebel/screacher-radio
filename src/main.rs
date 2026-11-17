@@ -1,5 +1,6 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod i18n;
 mod metadata;
 mod playback;
 mod settings;

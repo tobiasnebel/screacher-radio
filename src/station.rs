@@ -8,7 +8,10 @@ use std::{
 use ureq::{Agent, ResponseExt, http::header::CONTENT_TYPE};
 use url::Url;
 
-use crate::metadata::{IcyReader, TrackInfo};
+use crate::{
+    i18n::Texts,
+    metadata::{IcyReader, TrackInfo},
+};
 
 pub type BoxError = Box<dyn Error + Send + Sync>;
 const PLAYLIST_LIMIT: usize = 256 * 1024;
@@ -19,13 +22,13 @@ enum Playlist {
     Pls,
 }
 
-pub fn station_url(input: &str) -> Result<Url, BoxError> {
-    validate_url(Url::parse(input.trim())?)
+pub fn station_url(input: &str, texts: &Texts) -> Result<Url, BoxError> {
+    validate_url(Url::parse(input.trim())?, texts)
 }
 
-fn validate_url(mut url: Url) -> Result<Url, BoxError> {
+fn validate_url(mut url: Url, texts: &Texts) -> Result<Url, BoxError> {
     if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
-        return Err("Die URL muss mit http:// oder https:// beginnen.".into());
+        return Err(texts.http_required.into());
     }
     url.set_fragment(None);
     Ok(url)
@@ -33,6 +36,7 @@ fn validate_url(mut url: Url) -> Result<Url, BoxError> {
 
 pub fn open_stream(
     url: &Url,
+    texts: &Texts,
     cancelled: impl Fn() -> bool,
     on_track: impl FnMut(TrackInfo) + Send + 'static,
 ) -> Result<impl Read + Send + 'static, BoxError> {
@@ -45,17 +49,17 @@ pub fn open_stream(
         .user_agent("ScreacherRadio/0.1")
         .build()
         .into();
-    let mut url = validate_url(url.clone())?;
+    let mut url = validate_url(url.clone(), texts)?;
     // A station can point at a playlist. Its first entry must resolve to audio.
     for allow_playlist in [true, false] {
         if cancelled() {
-            return Err(io::Error::other("Wiedergabe abgebrochen").into());
+            return Err(io::Error::other(texts.playback_cancelled).into());
         }
         let response = agent.get(url.as_str()).header("icy-metadata", "1").call()?;
         if !response.status().is_success() {
             return Err(format!("HTTP {}", response.status()).into());
         }
-        let base = station_url(&response.get_uri().to_string())?;
+        let base = station_url(&response.get_uri().to_string(), texts)?;
         let mime = response
             .headers()
             .get(CONTENT_TYPE)
@@ -76,16 +80,14 @@ pub fn open_stream(
             return Ok(IcyReader::new(body, metadata_interval, on_track));
         };
         if !allow_playlist {
-            return Err("Der erste Playlist-Eintrag verweist auf eine weitere Playlist.".into());
+            return Err(texts.nested_playlist.into());
         }
         let mut data = Vec::new();
         let mut limited = body.take((PLAYLIST_LIMIT + 1) as u64);
         let mut chunk = [0; 4096];
         loop {
             if cancelled() {
-                return Err(
-                    "Zeitlimit beim Laden der Playlist oder Wiedergabe abgebrochen.".into(),
-                );
+                return Err(texts.playlist_timeout.into());
             }
             let read = limited.read(&mut chunk)?;
             if read == 0 {
@@ -94,9 +96,9 @@ pub fn open_stream(
             data.extend_from_slice(&chunk[..read]);
         }
         if data.len() > PLAYLIST_LIMIT {
-            return Err("Die Playlist ist größer als 256 KiB.".into());
+            return Err(texts.playlist_too_large.into());
         }
-        url = first_stream(&base, format, &String::from_utf8_lossy(&data))?;
+        url = first_stream(&base, format, &String::from_utf8_lossy(&data), texts)?;
     }
     unreachable!("second request returns either audio or an error")
 }
@@ -144,12 +146,12 @@ fn sniff_playlist(data: &[u8]) -> Option<Playlist> {
     }
 }
 
-fn first_stream(base: &Url, format: Playlist, text: &str) -> Result<Url, BoxError> {
+fn first_stream(base: &Url, format: Playlist, text: &str, texts: &Texts) -> Result<Url, BoxError> {
     let mut lines = text.trim_start_matches('\u{feff}').lines().map(str::trim);
     let entry = match format {
         Playlist::M3u => {
             if lines.clone().any(|line| line.starts_with("#EXT-X-")) {
-                return Err("HLS-Playlists werden nicht unterstützt.".into());
+                return Err(texts.hls_unsupported.into());
             }
             lines.find(|line| !line.is_empty() && !line.starts_with('#'))
         }
@@ -163,20 +165,22 @@ fn first_stream(base: &Url, format: Playlist, text: &str) -> Result<Url, BoxErro
             .min_by_key(|&(index, _)| index)
             .map(|(_, value)| value),
     };
-    let entry = entry.ok_or("Die Playlist enthält keinen Stream.")?;
-    validate_url(base.join(entry)?)
+    let entry = entry.ok_or(texts.playlist_empty)?;
+    validate_url(base.join(entry)?, texts)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::Language;
 
     #[test]
     fn m3u_uses_first_entry_and_resolves_relative_urls() {
-        let base = station_url("https://example.net/radio/list.m3u").unwrap();
+        let texts = Language::English.texts();
+        let base = station_url("https://example.net/radio/list.m3u", texts).unwrap();
         let playlist = "\u{feff}#EXTM3U\r\n\r\n#EXTINF:-1, Station\r\n../live.mp3\r\nhttps://example.org/backup\r\n";
         assert_eq!(
-            first_stream(&base, Playlist::M3u, playlist)
+            first_stream(&base, Playlist::M3u, playlist, texts)
                 .unwrap()
                 .as_str(),
             "https://example.net/live.mp3"
@@ -185,11 +189,12 @@ mod tests {
 
     #[test]
     fn pls_uses_lowest_file_index() {
-        let base = station_url("http://example.net/list.pls").unwrap();
+        let texts = Language::English.texts();
+        let base = station_url("http://example.net/list.pls", texts).unwrap();
         let playlist =
             "[playlist]\nFile2=http://example.net/backup\nFILE1 = https://example.org/live\n";
         assert_eq!(
-            first_stream(&base, Playlist::Pls, playlist)
+            first_stream(&base, Playlist::Pls, playlist, texts)
                 .unwrap()
                 .as_str(),
             "https://example.org/live"
@@ -198,16 +203,18 @@ mod tests {
 
     #[test]
     fn rejects_hls_and_non_http_entries() {
-        let base = station_url("http://example.net/radio").unwrap();
+        let texts = Language::English.texts();
+        let base = station_url("http://example.net/radio", texts).unwrap();
         assert!(
             first_stream(
                 &base,
                 Playlist::M3u,
-                "#EXTM3U\n#EXT-X-TARGETDURATION:6\nsegment.ts"
+                "#EXTM3U\n#EXT-X-TARGETDURATION:6\nsegment.ts",
+                texts
             )
             .is_err()
         );
-        assert!(first_stream(&base, Playlist::M3u, "file:///tmp/audio.mp3").is_err());
-        assert!(station_url("file:///tmp/radio.m3u").is_err());
+        assert!(first_stream(&base, Playlist::M3u, "file:///tmp/audio.mp3", texts).is_err());
+        assert!(station_url("file:///tmp/radio.m3u", texts).is_err());
     }
 }

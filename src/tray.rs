@@ -1,6 +1,6 @@
 use fltk::app::Sender;
 
-use crate::ui::Event;
+use crate::{i18n::Texts, ui::Event};
 
 const SIZE: u32 = 32;
 
@@ -29,7 +29,7 @@ pub struct Tray {
 
 #[cfg(windows)]
 impl Tray {
-    pub fn new(messages: Sender<Event>) -> Option<Self> {
+    pub fn new(messages: Sender<Event>, texts: &'static Texts) -> Option<Self> {
         use tray_icon::{
             Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
             menu::{Menu, MenuEvent, MenuItem},
@@ -37,8 +37,8 @@ impl Tray {
 
         let icon = Icon::from_rgba(icon_rgba(), SIZE, SIZE).ok()?;
         let menu = Menu::new();
-        let show = MenuItem::new("Player öffnen", true, None);
-        let quit = MenuItem::new("Beenden", true, None);
+        let show = MenuItem::new(texts.show_player, true, None);
+        let quit = MenuItem::new(texts.quit, true, None);
         menu.append_items(&[&show, &quit]).ok()?;
         let tray = TrayIconBuilder::new()
             .with_tooltip("Screacher Radio")
@@ -76,14 +76,17 @@ impl Tray {
 pub struct Tray(ksni::blocking::Handle<LinuxTray>);
 
 #[cfg(target_os = "linux")]
-struct LinuxTray(Sender<Event>);
+struct LinuxTray {
+    messages: Sender<Event>,
+    texts: &'static Texts,
+}
 
 #[cfg(target_os = "linux")]
 impl Tray {
-    pub fn new(messages: Sender<Event>) -> Option<Self> {
+    pub fn new(messages: Sender<Event>, texts: &'static Texts) -> Option<Self> {
         use ksni::blocking::TrayMethods;
 
-        LinuxTray(messages).spawn().map(Self).ok()
+        LinuxTray { messages, texts }.spawn().map(Self).ok()
     }
 }
 
@@ -105,7 +108,7 @@ impl ksni::Tray for LinuxTray {
     }
 
     fn activate(&mut self, _: i32, _: i32) {
-        self.0.send(Event::Show);
+        self.messages.send(Event::Show);
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -124,14 +127,14 @@ impl ksni::Tray for LinuxTray {
         use ksni::menu::StandardItem;
         vec![
             StandardItem {
-                label: "Player öffnen".into(),
-                activate: Box::new(|tray: &mut Self| tray.0.send(Event::Show)),
+                label: self.texts.show_player.into(),
+                activate: Box::new(|tray: &mut Self| tray.messages.send(Event::Show)),
                 ..Default::default()
             }
             .into(),
             StandardItem {
-                label: "Beenden".into(),
-                activate: Box::new(|tray: &mut Self| tray.0.send(Event::Quit)),
+                label: self.texts.quit.into(),
+                activate: Box::new(|tray: &mut Self| tray.messages.send(Event::Quit)),
                 ..Default::default()
             }
             .into(),
@@ -139,11 +142,11 @@ impl ksni::Tray for LinuxTray {
     }
 
     fn watcher_online(&self) {
-        self.0.send(Event::TrayAvailable(true));
+        self.messages.send(Event::TrayAvailable(true));
     }
 
     fn watcher_offline(&self, _: ksni::OfflineReason) -> bool {
-        self.0.send(Event::TrayAvailable(false));
+        self.messages.send(Event::TrayAvailable(false));
         true
     }
 }
@@ -153,7 +156,7 @@ pub struct Tray;
 
 #[cfg(not(any(windows, target_os = "linux")))]
 impl Tray {
-    pub fn new(_: Sender<Event>) -> Option<Self> {
+    pub fn new(_: Sender<Event>, _: &'static Texts) -> Option<Self> {
         None
     }
 }

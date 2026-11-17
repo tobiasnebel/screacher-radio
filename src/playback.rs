@@ -14,6 +14,7 @@ use rtrb::{Consumer, RingBuffer};
 use url::Url;
 
 use crate::{
+    i18n::Texts,
     metadata::TrackInfo,
     station::{self, BoxError},
     ui::Event,
@@ -34,7 +35,13 @@ pub struct Playback {
 }
 
 impl Playback {
-    pub fn start(url: Url, volume: u8, id: u64, messages: Sender<Event>) -> io::Result<Self> {
+    pub fn start(
+        url: Url,
+        volume: u8,
+        id: u64,
+        messages: Sender<Event>,
+        texts: &'static Texts,
+    ) -> io::Result<Self> {
         let playback = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             volume: Arc::new(AtomicU8::new(volume)),
@@ -46,7 +53,7 @@ impl Playback {
         thread::Builder::new()
             .name("radio-playback".into())
             .spawn(move || {
-                let result = play(&url, volume, levels, &cancelled, move |event| {
+                let result = play(&url, volume, levels, &cancelled, texts, move |event| {
                     messages.send(Event::Playback(id, event));
                 });
                 if !cancelled.load(Ordering::Relaxed) {
@@ -80,6 +87,7 @@ fn play(
     volume: Arc<AtomicU8>,
     levels: Arc<AtomicU16>,
     cancelled: &Arc<AtomicBool>,
+    texts: &Texts,
     notify: impl Fn(PlaybackEvent) + Clone + Send + 'static,
 ) -> Result<(), BoxError> {
     let opening_deadline = Instant::now() + Duration::from_secs(25);
@@ -88,6 +96,7 @@ fn play(
     let notify_track = notify.clone();
     let reader = station::open_stream(
         url,
+        texts,
         || is_cancelled() || Instant::now() >= opening_deadline,
         move |track| notify_track(PlaybackEvent::TrackChanged(track)),
     )?;
@@ -96,9 +105,10 @@ fn play(
         cancelled: cancelled.clone(),
         opening: opening.clone(),
         opening_deadline,
+        timeout_message: texts.opening_timeout,
     };
-    let mut decoder = decode_stream(input)
-        .map_err(|error| format!("MP3-Stream konnte nicht geöffnet werden ({error})."))?;
+    let mut decoder =
+        decode_stream(input).map_err(|error| (texts.mp3_open_failed)(&error.to_string()))?;
     let channels = decoder.channels();
     let rate = decoder.sample_rate();
     let frame_len = usize::from(channels);
@@ -110,7 +120,7 @@ fn play(
         return Ok(());
     }
     if initial < frame_len {
-        return Err("Der MP3-Stream enthält keine Audiodaten.".into());
+        return Err(texts.empty_audio.into());
     }
     opening.store(false, Ordering::Relaxed);
 
@@ -125,7 +135,7 @@ fn play(
                 })
                 .open_stream_or_fallback()
         })
-        .map_err(|error| format!("Audioausgabe konnte nicht geöffnet werden ({error})."))?;
+        .map_err(|error| (texts.audio_open_failed)(&error.to_string()))?;
     output.log_on_drop(false);
     let sink = Sink::connect_new(output.mixer());
     let ended = Arc::new(AtomicBool::new(false));
@@ -166,7 +176,7 @@ fn play(
         thread::sleep(Duration::from_millis(15));
     }
     if output_failed.load(Ordering::Relaxed) {
-        return Err("Verbindung zum Audioausgabegerät verloren.".into());
+        return Err(texts.audio_device_lost.into());
     }
     Ok(())
 }
@@ -197,6 +207,7 @@ struct StreamReader<R> {
     cancelled: Arc<AtomicBool>,
     opening: Arc<AtomicBool>,
     opening_deadline: Instant,
+    timeout_message: &'static str,
 }
 
 impl<R: Read> Read for StreamReader<R> {
@@ -207,7 +218,7 @@ impl<R: Read> Read for StreamReader<R> {
         if self.opening.load(Ordering::Relaxed) && Instant::now() >= self.opening_deadline {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "Zeitlimit beim Starten des Streams",
+                self.timeout_message,
             ));
         }
         self.inner.get_mut().unwrap().read(buf)
@@ -402,8 +413,10 @@ mod tests {
             }
         });
         let (tracks, received) = std::sync::mpsc::channel();
+        let texts = crate::i18n::Language::English.texts();
         let reader = station::open_stream(
             &Url::parse(&playlist).unwrap(),
+            texts,
             || false,
             move |track| {
                 tracks.send(track).unwrap();
@@ -415,6 +428,7 @@ mod tests {
             cancelled: Arc::new(AtomicBool::new(false)),
             opening: Arc::new(AtomicBool::new(true)),
             opening_deadline: Instant::now() + Duration::from_secs(5),
+            timeout_message: texts.opening_timeout,
         })
         .unwrap();
         assert_eq!(decoder.sample_rate(), 44_100);

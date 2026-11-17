@@ -27,6 +27,7 @@ use fltk::{
 use url::Url;
 
 use crate::{
+    i18n::{Language, Texts},
     metadata::TrackInfo,
     playback::{Playback, PlaybackEvent},
     settings::{self, Settings, Station, Theme},
@@ -62,21 +63,23 @@ pub enum Event {
     MinimizeToTray(bool),
     AlwaysOnTop(bool),
     ThemeChanged(Theme),
+    LanguageChanged(Language),
     Playback(u64, PlaybackEvent),
 }
 
 pub fn run() {
     let _app = app::App::default().with_scheme(app::Scheme::Gtk);
     let (messages, events) = app::channel::<Event>();
-    let (path, mut settings, warning) = match Settings::path()
+    let (path, mut settings, warning) = match Settings::path(Language::English.texts())
         .and_then(|path| Settings::load(&path).map(|settings| (path, settings)))
     {
         Ok((path, settings)) => (Some(path), settings, None),
         Err(error) => (None, Settings::default(), Some(error)),
     };
+    let texts = settings.language.texts();
     let (stations_path, stations, station_warning) =
         match settings::stations_path().and_then(|path| {
-            settings::load_stations(&path, &settings.legacy_stations)
+            settings::load_stations(&path, &settings.legacy_stations, texts)
                 .map(|stations| (path, stations))
         }) {
             Ok((path, stations)) => {
@@ -90,7 +93,7 @@ pub fn run() {
         .as_ref()
         .and_then(|last| stations.iter().position(|station| &station.url == last));
     let mut radio = Radio {
-        view: View::new(messages, &settings),
+        view: View::new(messages, &settings, texts),
         messages,
         path,
         settings,
@@ -103,22 +106,18 @@ pub fn run() {
         timer: None,
         save_at: None,
         tray_available: false,
-        hidden_in_tray: false,
+        tray_position: None,
     };
     radio.refresh_stations();
     radio.refresh_playback_buttons();
     radio.show();
-    let tray = Tray::new(messages);
+    let tray = Tray::new(messages, texts);
     radio.set_tray_available(tray.is_some());
     if let Some(error) = warning {
-        dialog::alert_default(&format!(
-            "Einstellungen konnten nicht geladen werden. Änderungen an den Einstellungen gelten nur für diese Sitzung.\n{error}"
-        ));
+        dialog::alert_default(&(texts.settings_load_failed)(&error.to_string()));
     }
     if let Some(error) = station_warning {
-        dialog::alert_default(&format!(
-            "stations.yaml neben der Programmdatei konnte nicht geladen oder erstellt werden.\n{error}"
-        ));
+        dialog::alert_default(&(texts.stations_load_failed)(&error.to_string()));
     }
 
     'event_loop: loop {
@@ -159,7 +158,7 @@ struct Radio {
     timer: Option<Instant>,
     save_at: Option<Instant>,
     tray_available: bool,
-    hidden_in_tray: bool,
+    tray_position: Option<(i32, i32, i32)>,
 }
 
 impl Radio {
@@ -209,7 +208,7 @@ impl Radio {
                 }
             }
             Event::Play => self.play(),
-            Event::Stop => self.stop("Wiedergabe gestoppt"),
+            Event::Stop => self.stop(self.view.texts.playback_stopped),
             Event::Volume(volume) => {
                 self.settings.volume = volume;
                 if let Some(playing) = &self.playing {
@@ -259,22 +258,32 @@ impl Radio {
                 self.view.apply_theme(theme);
                 self.save();
             }
+            Event::LanguageChanged(language) => {
+                self.settings.language = language;
+                self.save();
+            }
             Event::Playback(id, state) if id == self.playback_id => self.playback_event(state),
             Event::Playback(..) => {}
         }
     }
 
     fn show(&mut self) {
-        self.hidden_in_tray = false;
+        if let Some((x, y, screen)) = self.tray_position.take() {
+            self.view.window.set_pos(x, y);
+            // FLTK recreates the native window and otherwise may choose the screen under the mouse.
+            self.view.window.set_screen_num(screen);
+            self.view.window.force_position(true);
+        }
         show_window(&mut self.view.window, self.settings.always_on_top);
     }
 
     fn hide_to_tray(&mut self) {
         if self.settings.minimize_to_tray && self.tray_available && self.view.window.shown() {
+            let window = &self.view.window;
+            self.tray_position = Some((window.x(), window.y(), window.screen_num()));
             self.view.timer_window.hide();
             self.view.settings_window.hide();
             self.view.window.hide();
-            self.hidden_in_tray = true;
         }
     }
 
@@ -285,10 +294,8 @@ impl Radio {
             self.view.tray_note.set_label("");
         } else {
             self.view.minimize.deactivate();
-            self.view
-                .tray_note
-                .set_label("Der Desktop stellt kein Tray bereit.");
-            if self.hidden_in_tray {
+            self.view.tray_note.set_label(self.view.texts.no_tray);
+            if self.tray_position.is_some() {
                 self.show();
             }
         }
@@ -318,9 +325,9 @@ impl Radio {
             }
         }
         self.view.empty.set_label(if self.stations.is_empty() {
-            "Füge einen Sender per URL hinzu."
+            self.view.texts.no_stations
         } else {
-            "Keine passenden Sender"
+            self.view.texts.no_matches
         });
         if self.visible_stations.is_empty() {
             self.view.empty.show();
@@ -336,9 +343,9 @@ impl Radio {
             let station = &self.stations[index];
             self.view.list.set_tooltip(station.url.as_str());
             let (icon, tooltip) = if station.favorite {
-                ("@radio_star", "Favorit entfernen")
+                ("@radio_star", self.view.texts.unfavorite)
             } else {
-                ("@radio_star_outline", "Als Favorit markieren")
+                ("@radio_star_outline", self.view.texts.favorite)
             };
             self.view.favorite.set_label(icon);
             self.view.favorite.set_tooltip(tooltip);
@@ -347,7 +354,7 @@ impl Radio {
         } else {
             self.view.list.set_tooltip("");
             self.view.favorite.set_label("@radio_star_outline");
-            self.view.favorite.set_tooltip("Als Favorit markieren");
+            self.view.favorite.set_tooltip(self.view.texts.favorite);
             self.view.favorite.deactivate();
             self.view.remove.deactivate();
         }
@@ -379,15 +386,15 @@ impl Radio {
             .trim()
             .replace(['\t', '\n', '\r'], " ");
         if name.is_empty() {
-            dialog::alert_default("Gib einen Namen für den Sender ein.");
+            dialog::alert_default(self.view.texts.missing_name);
             return;
         }
-        let Ok(url) = station_url(&self.view.url.value()) else {
-            dialog::alert_default("Gib eine gültige HTTP- oder HTTPS-URL ein.");
+        let Ok(url) = station_url(&self.view.url.value(), self.view.texts) else {
+            dialog::alert_default(self.view.texts.invalid_url);
             return;
         };
         if self.stations.iter().any(|station| station.url == url) {
-            dialog::alert_default("Diese URL ist bereits in der Senderliste.");
+            dialog::alert_default(self.view.texts.duplicate_url);
             return;
         }
         let index = self.stations.len();
@@ -412,8 +419,10 @@ impl Radio {
             return;
         };
         let station = &self.stations[index];
-        let prompt = format!("„{}“ aus der Senderliste löschen?", station.name);
-        if dialog::choice2_default(&prompt, "Abbrechen", "Löschen", "") != Some(1) {
+        let prompt = (self.view.texts.confirm_delete)(&station.name);
+        if dialog::choice2_default(&prompt, self.view.texts.cancel, self.view.texts.delete, "")
+            != Some(1)
+        {
             return;
         }
         let mut stations = self.stations.clone();
@@ -426,7 +435,7 @@ impl Radio {
             .as_ref()
             .is_some_and(|playing| playing.url == station.url)
         {
-            self.stop("Wiedergabe gestoppt");
+            self.stop(self.view.texts.playback_stopped);
         }
         if self.settings.last_station.as_ref() == Some(&station.url) {
             self.settings.last_station = None;
@@ -438,15 +447,13 @@ impl Radio {
 
     fn replace_stations(&mut self, stations: Vec<Station>) -> bool {
         let Some(path) = &self.stations_path else {
-            dialog::alert_default(
-                "Korrigiere stations.yaml neben der Programmdatei und starte den Player neu.",
-            );
+            dialog::alert_default(self.view.texts.fix_stations);
             return false;
         };
         if let Err(error) = settings::save_stations(path, &stations) {
-            dialog::alert_default(&format!(
-                "Senderliste konnte nicht gespeichert werden.\n{}\n{error}",
-                path.display()
+            dialog::alert_default(&(self.view.texts.stations_save_failed)(
+                &path.to_string_lossy(),
+                &error.to_string(),
             ));
             return false;
         }
@@ -483,9 +490,10 @@ impl Radio {
             self.settings.volume,
             self.playback_id,
             self.messages,
+            self.view.texts,
         ) {
             Ok(playback) => {
-                self.view.status(&format!("Verbinde mit {name} …"));
+                self.view.status(&(self.view.texts.connecting)(&name));
                 self.playing = Some(Playing {
                     url,
                     name,
@@ -494,9 +502,9 @@ impl Radio {
                     meter_due: None,
                 });
             }
-            Err(error) => self.view.status(&format!(
-                "Wiedergabe konnte nicht gestartet werden ({error})."
-            )),
+            Err(error) => self
+                .view
+                .status(&(self.view.texts.playback_failed)(&error.to_string())),
         }
         self.refresh_playback_buttons();
     }
@@ -516,14 +524,14 @@ impl Radio {
             PlaybackEvent::Started(at) => {
                 playing.started_at = Some(at);
                 playing.meter_due = Some(at);
-                self.view.status(&format!("Spielt: {}", playing.name));
+                self.view.status(&(self.view.texts.playing)(&playing.name));
                 self.settings.last_station = Some(playing.url.clone());
                 self.save();
             }
             PlaybackEvent::TrackChanged(track) => self.view.stream_info.set_track(&track),
-            PlaybackEvent::Ended => self.stop("Stream beendet"),
+            PlaybackEvent::Ended => self.stop(self.view.texts.stream_ended),
             PlaybackEvent::Failed(error) => {
-                let status = format!("{}: {error}", playing.name);
+                let status = (self.view.texts.station_error)(&playing.name, &error);
                 self.stop(&status);
             }
         }
@@ -537,7 +545,7 @@ impl Radio {
                 self.timer = Some(at);
                 self.view.timer_window.hide();
             }
-            None => dialog::alert_default("Gib eine gültige, positive Anzahl Minuten ein."),
+            None => dialog::alert_default(self.view.texts.invalid_minutes),
         }
     }
 
@@ -561,7 +569,7 @@ impl Radio {
         let timer_seconds = self.timer.and_then(|at| {
             if now >= at {
                 self.timer = None;
-                self.stop("Sleeptimer abgelaufen");
+                self.stop(self.view.texts.timer_expired);
                 return None;
             }
             let remaining = at.duration_since(now).as_secs_f64();
@@ -586,7 +594,7 @@ impl Radio {
             && let Err(error) = self.settings.save(path)
         {
             self.view
-                .status(&format!("Speichern fehlgeschlagen: {error}"));
+                .status(&(self.view.texts.settings_save_failed)(&error.to_string()));
         }
     }
 }
@@ -620,6 +628,7 @@ fn extend_deadline(deadline: Option<Instant>, now: Instant, minutes: u64) -> Opt
 const TIMER_ICON: &str = "@radio_clock";
 
 struct View {
+    texts: &'static Texts,
     window: Window,
     palette: Palette,
     search: Input,
@@ -650,7 +659,7 @@ struct View {
 }
 
 impl View {
-    fn new(messages: Sender<Event>, settings: &Settings) -> Self {
+    fn new(messages: Sender<Event>, settings: &Settings, texts: &'static Texts) -> Self {
         let palette = Palette::current();
         app::add_symbol("radio_clock", true, draw_clock).expect("register clock symbol");
         app::add_symbol("radio_speaker", true, draw_speaker).expect("register speaker symbol");
@@ -667,51 +676,57 @@ impl View {
             .with_label("Screacher Radio");
         let mut menu = MenuBar::new(12, 12, 530, 28, None);
         for (label, event) in [
-            ("Datei/Station hinzufügen", Event::Add),
-            ("Datei/Einstellungen", Event::Settings),
-            ("Datei/Beenden", Event::Quit),
+            (texts.menu_add, Event::Add),
+            (texts.menu_settings, Event::Settings),
+            (texts.menu_quit, Event::Quit),
         ] {
             menu.add(label, Shortcut::None, MenuFlag::Normal, move |_| {
                 messages.send(event.clone());
             });
         }
-        menu.add("Info/About", Shortcut::None, MenuFlag::Normal, move |_| {
-            messages.send(Event::About);
-        });
+        menu.add(
+            texts.menu_about,
+            Shortcut::None,
+            MenuFlag::Normal,
+            move |_| {
+                messages.send(Event::About);
+            },
+        );
         let mut settings_button = Button::new(550, 12, 38, 28, "@radio_gear");
-        settings_button.set_tooltip("Einstellungen");
+        settings_button.set_tooltip(texts.settings);
         settings_button.emit(messages, Event::Settings);
-        let mut search = Input::new(62, 52, 390, 28, "Suche");
+        let mut search = Input::new(62, 52, 390, 28, texts.search);
         search.set_trigger(CallbackTrigger::Changed);
         search.set_callback(move |_| messages.send(Event::Search));
-        let mut favorites = CheckButton::new(460, 52, 128, 28, "Nur Favoriten");
+        let mut favorites = CheckButton::new(460, 52, 128, 28, texts.only_favorites);
         favorites.set_callback(move |_| messages.send(Event::Search));
         let station_area = Group::new(12, 90, 576, 205, None);
         let mut list = HoldBrowser::new(12, 90, 282, 205, None);
-        list.set_format_char('\0');
-        list.set_column_char('\0');
+        // Station names are stored as single-line text, so neither marker can appear in a row.
+        list.set_format_char('\r');
+        list.set_column_char('\t');
         list.set_callback(move |list| {
             messages.send(Event::Select(list.value(), app::event_clicks()))
         });
         let mut empty = Frame::new(24, 158, 258, 36, None);
         empty.set_label_color(Color::Dark3);
-        let stream_info = StreamInfo::new();
+        let stream_info = StreamInfo::new(texts);
         station_area.end();
-        let mut add = Button::new(12, 305, 118, 28, "Hinzufügen…");
+        let mut add = Button::new(12, 305, 118, 28, texts.add_action);
         add.emit(messages, Event::Add);
-        let mut remove = Button::new(138, 305, 100, 28, "Löschen…");
+        let mut remove = Button::new(138, 305, 100, 28, texts.remove_action);
         remove.emit(messages, Event::Remove);
         let mut favorite = Button::new(246, 305, 38, 28, "@radio_star_outline");
         favorite.emit(messages, Event::Favorite);
         let mut play = Button::new(12, 344, 76, 28, "@radio_play");
-        play.set_tooltip("Wiedergabe starten");
+        play.set_tooltip(texts.play);
         play.emit(messages, Event::Play);
         let mut stop = Button::new(96, 344, 76, 28, "@radio_stop");
-        stop.set_tooltip("Wiedergabe stoppen");
+        stop.set_tooltip(texts.stop);
         stop.emit(messages, Event::Stop);
-        Frame::new(207, 344, 24, 28, "@radio_speaker").set_tooltip("Lautstärke");
+        Frame::new(207, 344, 24, 28, "@radio_speaker").set_tooltip(texts.volume);
         let mut volume = ValueSlider::new(237, 344, 198, 28, None);
-        volume.set_tooltip("Lautstärke mit dem Mausrad ändern");
+        volume.set_tooltip(texts.volume_wheel);
         volume.set_type(SliderType::Horizontal);
         volume.set_range(0.0, 100.0);
         volume.set_precision(0);
@@ -734,10 +749,10 @@ impl View {
             true
         });
         let mut timer_button = Button::new(468, 344, 120, 28, TIMER_ICON);
-        timer_button.set_tooltip("Sleeptimer öffnen");
+        timer_button.set_tooltip(texts.open_timer);
         timer_button.emit(messages, Event::Timer);
-        let meter = StereoMeter::new();
-        let mut status = Frame::new(12, 421, 576, 22, "Bereit");
+        let meter = StereoMeter::new(texts);
+        let mut status = Frame::new(12, 421, 576, 22, texts.ready);
         status.set_align(Align::Inside | Align::Left | Align::Clip);
         window.end();
         window.resizable(&station_area);
@@ -760,58 +775,57 @@ impl View {
 
         let mut add_window = Window::default()
             .with_size(475, 143)
-            .with_label("Sender hinzufügen");
-        let name = Input::new(68, 14, 393, 28, "Name");
+            .with_label(texts.add_station);
+        let name = Input::new(68, 14, 393, 28, texts.name);
         let mut url = Input::new(68, 50, 393, 28, "URL");
-        url.set_tooltip("HTTP(S)-Adresse eines MP3-Streams oder einer M3U-/PLS-Playlist");
-        let mut save = Button::new(341, 100, 120, 28, "Hinzufügen");
+        url.set_tooltip(texts.url_hint);
+        let mut save = Button::new(341, 100, 120, 28, texts.add);
         save.emit(messages, Event::SaveStation);
         add_window.end();
         add_window.make_modal(true);
 
         let mut timer_window = Window::default()
             .with_size(342, 181)
-            .with_label("Sleeptimer");
-        let mut preset_label = Frame::new(14, 10, 314, 20, "Starten für");
+            .with_label(texts.sleep_timer);
+        let mut preset_label = Frame::new(14, 10, 314, 20, texts.start_for);
         preset_label.set_align(Align::Inside | Align::Left);
         for (column, minutes) in [15, 30, 45, 60].into_iter().enumerate() {
-            let label = format!("{minutes} Min.");
+            let label = (texts.timer_preset)(minutes);
             Button::new(14 + column as i32 * 80, 34, 74, 28, label.as_str())
                 .emit(messages, Event::StartTimer(Some(minutes)));
         }
-        let mut extend_label = Frame::new(14, 70, 314, 20, "Verlängern");
+        let mut extend_label = Frame::new(14, 70, 314, 20, texts.extend);
         extend_label.set_align(Align::Inside | Align::Left);
         let extend_buttons = std::array::from_fn(|column| {
             let minutes = [5, 10, 15][column];
-            let label = format!("+{minutes} Min.");
+            let label = (texts.timer_extension)(minutes);
             let mut button = Button::new(14 + column as i32 * 80, 94, 74, 28, label.as_str());
             button.emit(messages, Event::ExtendTimer(minutes));
             button.deactivate();
             button
         });
-        let mut minutes = IntInput::new(70, 139, 46, 28, "Minuten");
+        let mut minutes = IntInput::new(70, 139, 46, 28, texts.minutes);
         minutes.set_value("30");
-        let mut clear = Button::new(205, 139, 123, 28, "Timer abbrechen");
+        let mut clear = Button::new(205, 139, 123, 28, texts.cancel_timer);
         clear.emit(messages, Event::CancelTimer);
-        let mut start = Button::new(124, 139, 73, 28, "Starten");
+        let mut start = Button::new(124, 139, 73, 28, texts.start);
         start.emit(messages, Event::StartTimer(None));
         timer_window.end();
         timer_window.set_callback(|window| window.hide());
 
         let mut settings_window = Window::default()
-            .with_size(370, 182)
-            .with_label("Einstellungen");
-        let mut minimize =
-            CheckButton::new(12, 12, 345, 28, "Beim Minimieren in den Tray verschieben");
+            .with_size(370, 235)
+            .with_label(texts.settings);
+        let mut minimize = CheckButton::new(12, 12, 345, 28, texts.minimize_to_tray);
         minimize.set_value(settings.minimize_to_tray);
         minimize.set_callback(move |button| messages.send(Event::MinimizeToTray(button.value())));
         let mut tray_note = Frame::new(14, 44, 342, 20, None);
         tray_note.set_align(Align::Inside | Align::Left);
-        let mut on_top = CheckButton::new(12, 67, 344, 26, "Immer im Vordergrund");
+        let mut on_top = CheckButton::new(12, 67, 344, 26, texts.always_on_top);
         on_top.set_value(settings.always_on_top);
         on_top.set_callback(move |button| messages.send(Event::AlwaysOnTop(button.value())));
-        let mut theme = Choice::new(68, 104, 154, 28, "Theme");
-        theme.add_choice("Standard|Dunkel");
+        let mut theme = Choice::new(90, 104, 154, 28, texts.theme);
+        theme.add_choice(&format!("{}|{}", texts.theme_standard, texts.theme_dark));
         theme.set_value(i32::from(settings.theme == Theme::Dark));
         theme.set_callback(move |choice| {
             let theme = if choice.value() == 1 {
@@ -821,28 +835,45 @@ impl View {
             };
             messages.send(Event::ThemeChanged(theme));
         });
-        let mut close = Button::new(255, 143, 101, 28, "Schließen");
+        let mut language = Choice::new(90, 143, 154, 28, texts.language);
+        for (index, option) in Language::OPTIONS.into_iter().enumerate() {
+            language.add_choice(option.label(texts));
+            if option == settings.language {
+                language.set_value(index as i32);
+            }
+        }
+        language.set_callback(move |choice| {
+            if let Some(&language) = Language::OPTIONS.get(choice.value() as usize) {
+                messages.send(Event::LanguageChanged(language));
+            }
+        });
+        let mut restart = Frame::new(14, 175, 342, 20, texts.restart_language);
+        restart.set_align(Align::Inside | Align::Left);
+        let mut close = Button::new(255, 196, 101, 28, texts.close);
         let mut settings_dialog = settings_window.clone();
         close.set_callback(move |_| settings_dialog.hide());
         settings_window.end();
         settings_window.make_modal(false);
         settings_window.set_callback(|window| window.hide());
 
-        let mut about_window = Window::default().with_size(260, 122).with_label("About");
+        let mut about_window = Window::default()
+            .with_size(260, 122)
+            .with_label(texts.about);
         Frame::new(
             12,
             15,
             236,
             48,
-            concat!("Screacher Radio\nVersion ", env!("CARGO_PKG_VERSION")),
+            (texts.version)(env!("CARGO_PKG_VERSION")).as_str(),
         );
-        let mut close = Button::new(80, 80, 100, 28, "Schließen");
+        let mut close = Button::new(80, 80, 100, 28, texts.close);
         let mut about_dialog = about_window.clone();
         close.set_callback(move |_| about_dialog.hide());
         about_window.end();
         about_window.make_modal(true);
 
         let mut view = Self {
+            texts,
             window,
             palette,
             search,
@@ -937,10 +968,10 @@ impl View {
             self.timer_button
                 .set_label(&format!("{TIMER_ICON}  {time}"));
             self.extend_label
-                .set_label(&format!("Verlängern (Restzeit {time})"));
+                .set_label(&(self.texts.timer_remaining)(&time));
         } else {
             self.timer_button.set_label(TIMER_ICON);
-            self.extend_label.set_label("Verlängern");
+            self.extend_label.set_label(self.texts.extend);
         }
     }
 }
@@ -953,19 +984,23 @@ struct StreamInfo {
 }
 
 impl StreamInfo {
-    fn new() -> Self {
+    fn new(texts: &Texts) -> Self {
         let mut panel = Group::new(306, 90, 282, 205, None);
         panel.set_frame(FrameType::BorderBox);
-        let mut heading = Frame::new(318, 100, 258, 22, "Streaminformationen");
+        let mut heading = Frame::new(318, 100, 258, 22, texts.stream_information);
         heading.set_align(Align::Inside | Align::Left);
         heading.set_label_font(Font::HelveticaBold);
-        let [title, artist, elapsed] =
-            [("Titel", 129), ("Interpret", 183), ("Laufzeit", 237)].map(|(label, y)| {
-                Frame::new(318, y, 258, 19, label).set_align(Align::Inside | Align::Left);
-                let mut value = Output::new(318, y + 20, 258, 25, None);
-                value.set_value("—");
-                value
-            });
+        let [title, artist, elapsed] = [
+            (texts.title, 129),
+            (texts.artist, 183),
+            (texts.elapsed, 237),
+        ]
+        .map(|(label, y)| {
+            Frame::new(318, y, 258, 19, label).set_align(Align::Inside | Align::Left);
+            let mut value = Output::new(318, y + 20, 258, 25, None);
+            value.set_value("—");
+            value
+        });
         panel.end();
         Self {
             title,
@@ -1101,11 +1136,11 @@ struct StereoMeter {
 impl StereoMeter {
     const SEGMENTS: usize = 24;
 
-    fn new() -> Self {
-        Frame::new(12, 381, 16, 15, "L").set_tooltip("Linker Kanal");
-        Frame::new(12, 398, 16, 15, "R").set_tooltip("Rechter Kanal");
+    fn new(texts: &Texts) -> Self {
+        Frame::new(12, 381, 16, 15, "L").set_tooltip(texts.left_channel);
+        Frame::new(12, 398, 16, 15, "R").set_tooltip(texts.right_channel);
         let mut frame = Frame::new(34, 381, 554, 32, None);
-        frame.set_tooltip("Stereo-Spitzenpegel nach Lautstärke (−48 bis 0 dBFS)");
+        frame.set_tooltip(texts.meter_hint);
         let segments = Rc::new(Cell::new([0, 0]));
         let visible_segments = segments.clone();
         let inactive_color = Rc::new(Cell::new(Color::from_rgb(214, 220, 222)));

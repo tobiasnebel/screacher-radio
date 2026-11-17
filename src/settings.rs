@@ -8,7 +8,10 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::station::station_url;
+use crate::{
+    i18n::{Language, Texts},
+    station::station_url,
+};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Station {
@@ -36,6 +39,7 @@ pub struct Settings {
     pub minimize_to_tray: bool,
     pub always_on_top: bool,
     pub theme: Theme,
+    pub language: Language,
 }
 
 impl Default for Settings {
@@ -47,14 +51,15 @@ impl Default for Settings {
             minimize_to_tray: false,
             always_on_top: false,
             theme: Theme::Standard,
+            language: Language::default(),
         }
     }
 }
 
 impl Settings {
-    pub fn path() -> io::Result<PathBuf> {
+    pub fn path(texts: &Texts) -> io::Result<PathBuf> {
         let dirs = ProjectDirs::from("", "", "Screacher Radio")
-            .ok_or_else(|| io::Error::other("Konfigurationsordner nicht gefunden"))?;
+            .ok_or_else(|| io::Error::other(texts.config_folder_missing))?;
         Ok(dirs.config_dir().join("settings.json"))
     }
 
@@ -83,9 +88,9 @@ pub fn stations_path() -> io::Result<PathBuf> {
     Ok(std::env::current_exe()?.with_file_name("stations.yaml"))
 }
 
-pub fn load_stations(path: &Path, legacy: &[Station]) -> io::Result<Vec<Station>> {
+pub fn load_stations(path: &Path, legacy: &[Station], texts: &Texts) -> io::Result<Vec<Station>> {
     match File::open(path) {
-        Ok(file) => read_stations(file),
+        Ok(file) => read_stations(file, texts),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             if legacy.is_empty() {
                 return Ok(Vec::new());
@@ -93,7 +98,7 @@ pub fn load_stations(path: &Path, legacy: &[Station]) -> io::Result<Vec<Station>
             match write_stations(path, legacy, false) {
                 Ok(()) => Ok(legacy.to_vec()),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    read_stations(File::open(path)?)
+                    read_stations(File::open(path)?, texts)
                 }
                 Err(error) => Err(error),
             }
@@ -102,7 +107,7 @@ pub fn load_stations(path: &Path, legacy: &[Station]) -> io::Result<Vec<Station>
     }
 }
 
-fn read_stations(file: File) -> io::Result<Vec<Station>> {
+fn read_stations(file: File, texts: &Texts) -> io::Result<Vec<Station>> {
     let mut stations: Vec<Station> = serde_saphyr::from_reader(BufReader::new(file))
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
     for (index, station) in stations.iter_mut().enumerate() {
@@ -110,13 +115,13 @@ fn read_stations(file: File) -> io::Result<Vec<Station>> {
         if station.name.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Sender {} hat keinen Namen.", index + 1),
+                (texts.station_name_missing)(index + 1),
             ));
         }
-        station.url = station_url(station.url.as_str()).map_err(|error| {
+        station.url = station_url(station.url.as_str(), texts).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Ungültige URL für Sender {}. {error}", index + 1),
+                (texts.station_url_invalid)(index + 1, &error.to_string()),
             )
         })?;
     }
@@ -156,16 +161,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_and_persists_window_preferences() {
+    fn defaults_and_persists_preferences() {
         let mut settings: Settings = serde_json::from_str(r#"{"volume":60}"#).unwrap();
         assert_eq!(settings.theme, Theme::Standard);
+        assert_eq!(settings.language, Language::English);
         assert!(!settings.always_on_top);
 
         settings.theme = Theme::Dark;
+        settings.language = Language::German;
         settings.always_on_top = true;
         let json = serde_json::to_string(&settings).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.theme, Theme::Dark);
+        assert_eq!(restored.language, Language::German);
         assert!(restored.always_on_top);
     }
 
@@ -177,12 +185,16 @@ mod tests {
         let mut settings = Settings::load(&json_path).unwrap();
         assert_eq!(settings.volume, 33);
         let path = dir.path().join("stations.yaml");
-        let migrated = load_stations(&path, &settings.legacy_stations).unwrap();
+        let migrated =
+            load_stations(&path, &settings.legacy_stations, Language::English.texts()).unwrap();
         assert_eq!(migrated, settings.legacy_stations);
-        assert_eq!(load_stations(&path, &[]).unwrap(), migrated);
+        assert_eq!(
+            load_stations(&path, &[], Language::English.texts()).unwrap(),
+            migrated
+        );
         save_stations(&path, &[]).unwrap();
         assert!(
-            load_stations(&path, &settings.legacy_stations)
+            load_stations(&path, &settings.legacy_stations, Language::English.texts())
                 .unwrap()
                 .is_empty()
         );
@@ -197,7 +209,7 @@ mod tests {
         let path = dir.path().join("stations.yaml");
         let invalid_yaml = "stations: [";
         fs::write(&path, invalid_yaml).unwrap();
-        assert!(load_stations(&path, &[]).is_err());
+        assert!(load_stations(&path, &[], Language::English.texts()).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), invalid_yaml);
     }
 }
