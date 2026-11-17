@@ -629,6 +629,7 @@ struct View {
     stream_info: StreamInfo,
     play: Button,
     stop: Button,
+    volume: ValueSlider,
     favorite: Button,
     remove: Button,
     timer_button: Button,
@@ -655,6 +656,7 @@ impl View {
         app::add_symbol("radio_speaker", true, draw_speaker).expect("register speaker symbol");
         app::add_symbol("radio_play", true, draw_play).expect("register play symbol");
         app::add_symbol("radio_stop", true, draw_stop).expect("register stop symbol");
+        app::add_symbol("radio_gear", true, draw_gear).expect("register gear symbol");
         app::add_symbol("radio_star", true, |color| draw_star(color, true))
             .expect("register star symbol");
         app::add_symbol("radio_star_outline", true, |color| draw_star(color, false))
@@ -663,19 +665,22 @@ impl View {
             .with_size(600, 452)
             .center_screen()
             .with_label("Screacher Radio");
-        let mut menu = MenuBar::new(12, 12, 448, 28, None);
-        menu.add(
-            "Datei/Beenden",
-            Shortcut::None,
-            MenuFlag::Normal,
-            move |_| {
-                messages.send(Event::Quit);
-            },
-        );
+        let mut menu = MenuBar::new(12, 12, 530, 28, None);
+        for (label, event) in [
+            ("Datei/Station hinzufügen", Event::Add),
+            ("Datei/Einstellungen", Event::Settings),
+            ("Datei/Beenden", Event::Quit),
+        ] {
+            menu.add(label, Shortcut::None, MenuFlag::Normal, move |_| {
+                messages.send(event.clone());
+            });
+        }
         menu.add("Info/About", Shortcut::None, MenuFlag::Normal, move |_| {
             messages.send(Event::About);
         });
-        Button::new(468, 12, 120, 28, "Einstellungen…").emit(messages, Event::Settings);
+        let mut settings_button = Button::new(550, 12, 38, 28, "@radio_gear");
+        settings_button.set_tooltip("Einstellungen");
+        settings_button.emit(messages, Event::Settings);
         let mut search = Input::new(62, 52, 390, 28, "Suche");
         search.set_trigger(CallbackTrigger::Changed);
         search.set_callback(move |_| messages.send(Event::Search));
@@ -847,6 +852,7 @@ impl View {
             stream_info,
             play,
             stop,
+            volume,
             favorite,
             remove,
             timer_button,
@@ -885,6 +891,11 @@ impl View {
 
     fn apply_theme(&mut self, theme: Theme) {
         self.palette.apply(theme);
+        self.volume.set_color(if theme == Theme::Dark {
+            Color::Background2
+        } else {
+            Color::Background
+        });
         self.empty.set_label_color(if theme == Theme::Dark {
             Color::Foreground
         } else {
@@ -1039,6 +1050,24 @@ fn draw_clock(color: Color) {
     draw::vertex(0.0, -0.47);
     draw::vertex(0.0, 0.0);
     draw::vertex(0.35, 0.22);
+    draw::end_line();
+}
+
+fn draw_gear(color: Color) {
+    draw::set_draw_color(color);
+    draw::begin_loop();
+    for point in 0..32 {
+        let angle = (f64::from(point) - 1.5) * std::f64::consts::PI / 16.0;
+        let radius = if matches!(point % 4, 1 | 2) {
+            0.82
+        } else {
+            0.62
+        };
+        draw::vertex(radius * angle.sin(), -radius * angle.cos());
+    }
+    draw::end_loop();
+    draw::begin_line();
+    draw::draw_arc2(0.0, 0.0, 0.27, 0.0, 360.0);
     draw::end_line();
 }
 

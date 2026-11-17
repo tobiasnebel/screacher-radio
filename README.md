@@ -26,6 +26,8 @@ Letzter Sender und Lautstärke bleiben in `settings.json`. Unter Windows liegt d
 
 Der Workflow [Build binaries](.github/workflows/build.yml) läuft bei einem Push oder per **Actions → Build binaries → Run workflow**. Nach erfolgreichem Build stehen im jeweiligen Lauf unter **Artifacts** die Windows-EXE und das Linux-Archiv `tar.gz` für x86_64 zum Download bereit. Der Linux-Build nutzt das Debian-Image aus dem Dockerfile. Die Laufzeitabhängigkeiten stehen unten im Abschnitt Linux.
 
+Wird auf GitHub ein Release veröffentlicht, baut derselbe Workflow den Stand des Release-Tags und hängt beide Dateien unter **Releases → Assets** an. Dort bleiben die Downloads über die Aufbewahrungsfrist der Actions-Artefakte hinaus verfügbar. Das nachträgliche Anhängen setzt voraus, dass das Repository Änderungen an veröffentlichten Release-Assets erlaubt.
+
 ## Windows
 
 Voraussetzungen sind Rust (stable), CMake ab 3.28 und ein zum Rust-Target passender C++17-Compiler. Für `windows-msvc` eignen sich die Visual Studio Build Tools mit C++-Desktopentwicklung, für `windows-gnu` MinGW-w64 mit `gcc`, `g++` und `mingw32-make` im `PATH`.
