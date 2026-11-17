@@ -4,6 +4,7 @@ Kleiner Webradio-Player in Rust mit FLTK für Windows und Linux.
 
 ## Bedienung
 
+- Das Hauptfenster lässt sich mit gedrückter linker Maustaste auf einer freien Fläche verschieben. **Datei → Beenden** schließt den Player.
 - Unter **Hinzufügen…** einen Namen und eine HTTP(S)-URL angeben. Direkte MP3-Streams sowie M3U- und PLS-Playlists werden unterstützt. Eine Playlist erscheint als ein Sender und spielt ihren ersten Stream.
 - Das Dreieck startet den ausgewählten Sender, das Quadrat stoppt die Wiedergabe. Beim Programmstart ist der zuletzt erfolgreich gespielte Sender vorausgewählt.
 - Rechts neben der Senderliste stehen die Laufzeit seit Wiedergabestart und, wenn der Stream ICY-Metadaten liefert, Titel und Interpret. Ein Eintrag der Form `Interpret - Titel` wird in beide Felder aufgeteilt.

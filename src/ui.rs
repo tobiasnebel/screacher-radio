@@ -732,6 +732,7 @@ impl View {
             .with_size(600, 452)
             .center_screen()
             .with_label("Screacher Radio");
+        window.set_border(false);
         let mut menu = MenuBar::new(12, 12, 530, 28, None);
         for (label, event) in [
             (texts.menu_add, Event::Add),
@@ -821,9 +822,35 @@ impl View {
                 _ => Event::Quit,
             });
         });
-        window.handle(move |_, event| {
-            if event == FltkEvent::Hide {
-                messages.send(Event::Minimized);
+        let mut drag_offset = None;
+        window.handle(move |window, event| {
+            match event {
+                FltkEvent::Push
+                    if app::event_mouse_button() == app::MouseButton::Left
+                        && !(0..window.children()).any(|index| {
+                            window.child(index).is_some_and(|child| {
+                                child.visible() && app::event_inside_widget(&child)
+                            })
+                        }) =>
+                {
+                    drag_offset = Some((
+                        app::event_x_root() - window.x(),
+                        app::event_y_root() - window.y(),
+                    ));
+                    return true;
+                }
+                FltkEvent::Drag => {
+                    if let Some((x, y)) = drag_offset {
+                        window.set_pos(app::event_x_root() - x, app::event_y_root() - y);
+                        return true;
+                    }
+                }
+                FltkEvent::Released => return drag_offset.take().is_some(),
+                FltkEvent::Hide => {
+                    drag_offset = None;
+                    messages.send(Event::Minimized);
+                }
+                _ => {}
             }
             false
         });
