@@ -1,26 +1,8 @@
 use fltk::app::Sender;
 
+#[cfg(any(windows, target_os = "linux"))]
+use crate::icon::{SMALL_RGBA, SMALL_SIZE};
 use crate::{i18n::Texts, ui::Event};
-
-const SIZE: u32 = 32;
-
-pub fn icon_rgba() -> Vec<u8> {
-    let mut pixels = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-    for y in 0..SIZE as i32 {
-        for x in 0..SIZE as i32 {
-            let radius_squared = (2 * x - 31).pow(2) + (2 * y - 31).pow(2);
-            let color = if radius_squared >= 30 * 30 {
-                [0, 0, 0, 0]
-            } else if (10..=22).contains(&x) && (y - 16).abs() * 2 <= 30 - x {
-                [255, 255, 255, 255]
-            } else {
-                [36, 90, 128, 255]
-            };
-            pixels.extend(color);
-        }
-    }
-    pixels
-}
 
 #[cfg(windows)]
 pub struct Tray {
@@ -35,7 +17,7 @@ impl Tray {
             menu::{Menu, MenuEvent, MenuItem},
         };
 
-        let icon = Icon::from_rgba(icon_rgba(), SIZE, SIZE).ok()?;
+        let icon = Icon::from_rgba(SMALL_RGBA.to_vec(), SMALL_SIZE, SMALL_SIZE).ok()?;
         let menu = Menu::new();
         let show = MenuItem::new(texts.show_player, true, None);
         let quit = MenuItem::new(texts.quit, true, None);
@@ -112,13 +94,13 @@ impl ksni::Tray for LinuxTray {
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        let mut data = icon_rgba();
+        let mut data = SMALL_RGBA.to_vec();
         for pixel in data.chunks_exact_mut(4) {
             pixel.rotate_right(1);
         }
         vec![ksni::Icon {
-            width: SIZE as i32,
-            height: SIZE as i32,
+            width: SMALL_SIZE as i32,
+            height: SMALL_SIZE as i32,
             data,
         }]
     }

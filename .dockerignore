@@ -1,5 +1,9 @@
 *
 !Cargo.toml
 !Cargo.lock
+!build.rs
+!media/
+!media/icons/
+!media/icons/screacher-radio-icon-512.png
 !src/
 !src/**

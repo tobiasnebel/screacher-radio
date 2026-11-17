@@ -5,8 +5,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext-dev libxfixes-dev libxft-dev libxinerama-dev libxrandr-dev libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY media/icons/screacher-radio-icon-512.png ./media/icons/
 COPY src ./src
+ARG SCREACHER_RELEASE_TAG
+ARG SCREACHER_COMMIT_SHA
 RUN cargo test --release --locked && cargo build --release --locked
 
 FROM scratch AS binary

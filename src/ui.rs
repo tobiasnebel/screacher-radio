@@ -11,12 +11,11 @@ use fltk::{
     button::{Button, CheckButton},
     dialog, draw,
     enums::{
-        Align, CallbackReason, CallbackTrigger, Color, ColorDepth, Event as FltkEvent, Font,
-        FrameType, Shortcut,
+        Align, CallbackReason, CallbackTrigger, Color, Event as FltkEvent, Font, FrameType,
+        Shortcut,
     },
     frame::Frame,
     group::Group,
-    image::RgbImage,
     input::{Input, IntInput},
     menu::{Choice, MenuBar, MenuFlag},
     output::Output,
@@ -28,12 +27,13 @@ use url::Url;
 
 use crate::{
     i18n::{Language, Texts},
+    icon,
     metadata::TrackInfo,
     playback::{Playback, PlaybackEvent},
     settings::{self, Settings, Station, Theme},
     station::station_url,
     theme::Palette,
-    tray::{self, Tray},
+    tray::Tray,
     window_order,
 };
 
@@ -769,9 +769,7 @@ impl View {
             }
             false
         });
-        if let Ok(icon) = RgbImage::new(&tray::icon_rgba(), 32, 32, ColorDepth::Rgba8) {
-            window.set_icon(Some(icon));
-        }
+        window.set_icon(Some(icon::window()));
 
         let mut add_window = Window::default()
             .with_size(475, 143)
@@ -857,16 +855,16 @@ impl View {
         settings_window.set_callback(|window| window.hide());
 
         let mut about_window = Window::default()
-            .with_size(260, 122)
+            .with_size(360, 188)
             .with_label(texts.about);
-        Frame::new(
-            12,
-            15,
-            236,
-            48,
-            (texts.version)(env!("CARGO_PKG_VERSION")).as_str(),
-        );
-        let mut close = Button::new(80, 80, 100, 28, texts.close);
+        about_window.set_icon(Some(icon::window()));
+        let logo_size = icon::ABOUT_SIZE;
+        Frame::new((360 - logo_size) / 2, 14, logo_size, logo_size, None)
+            .set_image(Some(icon::about()));
+        let version = (texts.version)(env!("SCREACHER_VERSION"));
+        let mut info = Frame::new(12, 84, 336, 52, version.as_str());
+        info.set_align(Align::Inside | Align::Wrap);
+        let mut close = Button::new(130, 146, 100, 28, texts.close);
         let mut about_dialog = about_window.clone();
         close.set_callback(move |_| about_dialog.hide());
         about_window.end();

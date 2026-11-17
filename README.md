@@ -28,6 +28,8 @@ Der Workflow [Build binaries](.github/workflows/build.yml) läuft bei einem Push
 
 Wird auf GitHub ein Release veröffentlicht, baut derselbe Workflow den Stand des Release-Tags und hängt beide Dateien unter **Releases → Assets** an. Dort bleiben die Downloads über die Aufbewahrungsfrist der Actions-Artefakte hinaus verfügbar. Das nachträgliche Anhängen setzt voraus, dass das Repository Änderungen an veröffentlichten Release-Assets erlaubt.
 
+Im About-Dialog entspricht die Version eines Release-Builds dem GitHub-Tag, etwa `v0.2.0`. Push- und manuell ausgelöste Builds tragen die Cargo-Version mit `-snapshot` und der abgekürzten Commit-ID, etwa `0.1.0-snapshot+abc1234`. Lokale Builds zeigen die Snapshot-Version ohne Commit-ID.
+
 ## Windows
 
 Voraussetzungen sind Rust (stable), CMake ab 3.28 und ein zum Rust-Target passender C++17-Compiler. Für `windows-msvc` eignen sich die Visual Studio Build Tools mit C++-Desktopentwicklung, für `windows-gnu` MinGW-w64 mit `gcc`, `g++` und `mingw32-make` im `PATH`.

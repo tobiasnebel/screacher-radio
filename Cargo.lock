@@ -1355,6 +1355,7 @@ dependencies = [
  "directories",
  "fltk",
  "ksni",
+ "png",
  "rodio",
  "rtrb",
  "serde",

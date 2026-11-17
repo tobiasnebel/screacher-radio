@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  SCREACHER_RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
+  SCREACHER_COMMIT_SHA: ${{ github.sha }}
+
 jobs:
   windows:
     name: Windows x86_64
@@ -43,7 +47,10 @@ jobs:
           persist-credentials: false
 
       - name: Test and build in Docker
-        run: docker build --output type=local,dest=dist/linux .
+        run: >-
+          docker build
+          --build-arg SCREACHER_RELEASE_TAG --build-arg SCREACHER_COMMIT_SHA
+          --output type=local,dest=dist/linux .
 
       - name: Package the executable
         run: tar -czf screacher-radio-linux-x86_64.tar.gz -C dist/linux screacher-radio
