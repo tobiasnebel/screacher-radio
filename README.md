@@ -4,12 +4,13 @@ Kleiner Webradio-Player in Rust mit FLTK für Windows und Linux.
 
 ## Bedienung
 
-- Das Hauptfenster lässt sich mit gedrückter linker Maustaste auf einer freien Fläche, im Streaminfo-Panel, auf der Statuszeile und auf freien Stellen der Menüleiste verschieben. **Datei → Beenden** schließt den Player.
+- Das Hauptfenster mit leicht gerundeten Ecken lässt sich mit gedrückter linker Maustaste auf einer freien Fläche, im Streaminfo-Panel, auf der Statuszeile und auf freien Stellen der Menüleiste verschieben. Oben rechts minimiert der Strich den Player gemäß der Tray-Einstellung. Das Kreuz und **Datei → Beenden** schließen den Player.
 - Das Theme **Light** unter **Einstellungen → Theme** verwendet einen perlmuttweißen Hintergrund mit blauer Schrift.
 - Unter **Hinzufügen…** einen Namen und eine HTTP(S)-URL angeben. Direkte MP3-Streams sowie M3U- und PLS-Playlists werden unterstützt. Eine Playlist erscheint als ein Sender und spielt ihren ersten Stream.
 - Das Dreieck startet den ausgewählten Sender, das Quadrat stoppt die Wiedergabe. Beim Programmstart ist der zuletzt erfolgreich gespielte Sender vorausgewählt.
 - Rechts neben der Senderliste stehen die Laufzeit seit Wiedergabestart und, wenn der Stream ICY-Metadaten liefert, Titel und Interpret. Ein Eintrag der Form `Interpret - Titel` wird in beide Felder aufgeteilt.
 - Die Lautstärke lässt sich auch mit dem Mausrad über dem Regler ändern. Die horizontalen Balken **L** und **R** zeigen die Spitzenpegel mit einem Verlauf von Grün über Gelb zu Rot. Bei Mono zeigen beide denselben Pegel.
+- Ein Klick auf das Lautsprechersymbol schaltet den Ton stumm oder wieder ein. Der Lautstärkewert bleibt erhalten und lässt sich auch bei stummgeschaltetem Ton ändern.
 - Unter **Einstellungen → Audioausgabegerät** kannst du ein Gerät fest auswählen oder das Standardgerät verwenden. Die Liste aktualisiert sich, während die Einstellungen offen sind. Ist das gespeicherte Gerät nicht verfügbar, wird das Standardgerät gewählt. Beim Wechsel kann der Ton kurz aussetzen. Sender und Sleeptimer laufen weiter.
 - Sender lassen sich löschen, über den Stern als Favoriten markieren und nach Name oder URL suchen. Ein voller Stern kennzeichnet einen Favoriten. **Nur Favoriten** lässt sich mit der Suche kombinieren.
 - Das Uhrsymbol öffnet den **Sleeptimer**. Er stoppt die Wiedergabe nach 15, 30, 45 oder 60 Minuten oder nach einer frei eingegebenen Dauer. Einen laufenden Timer kannst du um 5, 10 oder 15 Minuten verlängern. Beim Schließen des Dialogs und im Tray läuft der Countdown weiter.

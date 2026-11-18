@@ -1,5 +1,25 @@
 use fltk::{prelude::*, window::Window};
 
+#[cfg(windows)]
+pub fn show_in_taskbar(window: &Window) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    };
+    // FLTK creates borderless windows as tool windows. The main player needs a taskbar entry.
+    unsafe {
+        let handle = window.raw_handle();
+        let style = GetWindowLongPtrW(handle, GWL_EXSTYLE);
+        SetWindowLongPtrW(
+            handle,
+            GWL_EXSTYLE,
+            (style | WS_EX_APPWINDOW as isize) & !(WS_EX_TOOLWINDOW as isize),
+        );
+    }
+}
+
+#[cfg(not(windows))]
+pub fn show_in_taskbar(_: &Window) {}
+
 pub fn set_on_top(window: &Window, enabled: bool) {
     if window.shown() {
         set_native(window, enabled);

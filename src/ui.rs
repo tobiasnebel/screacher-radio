@@ -11,11 +11,12 @@ use fltk::{
     button::{Button, CheckButton},
     dialog, draw,
     enums::{
-        Align, CallbackReason, CallbackTrigger, Color, Event as FltkEvent, Font, FrameType,
-        Shortcut,
+        Align, CallbackReason, CallbackTrigger, Color, ColorDepth, Event as FltkEvent, Font,
+        FrameType, Shortcut,
     },
     frame::Frame,
     group::Group,
+    image::RgbImage,
     input::{Input, IntInput},
     menu::{Choice, MenuBar, MenuFlag},
     output::Output,
@@ -42,6 +43,7 @@ pub enum Event {
     Quit,
     Show,
     Minimized,
+    MinimizeWindow,
     Escape,
     #[cfg(target_os = "linux")]
     TrayAvailable(bool),
@@ -54,6 +56,7 @@ pub enum Event {
     Play,
     Stop,
     Volume(u8),
+    ToggleMute,
     Timer,
     StartTimer(Option<u64>),
     ExtendTimer(u64),
@@ -70,6 +73,7 @@ pub enum Event {
 
 pub fn run() {
     let _app = app::App::default().with_scheme(app::Scheme::Gtk);
+    app::set_visible_focus(false);
     let (messages, events) = app::channel::<Event>();
     let (path, mut settings, warning) = match Settings::path(Language::English.texts())
         .and_then(|path| Settings::load(&path).map(|settings| (path, settings)))
@@ -109,6 +113,7 @@ pub fn run() {
         tray_available: false,
         tray_position: None,
         next_device_check: Instant::now(),
+        muted: false,
     };
     radio.refresh_stations();
     radio.refresh_playback_buttons();
@@ -162,6 +167,7 @@ struct Radio {
     tray_available: bool,
     tray_position: Option<(i32, i32, i32)>,
     next_device_check: Instant,
+    muted: bool,
 }
 
 impl Radio {
@@ -169,6 +175,13 @@ impl Radio {
         match event {
             Event::Quit => unreachable!(),
             Event::Show => self.show(),
+            Event::MinimizeWindow => {
+                if self.settings.minimize_to_tray && self.tray_available {
+                    self.hide_to_tray();
+                } else {
+                    self.view.window.iconize();
+                }
+            }
             Event::Minimized => {
                 if self.view.window.shown() && !self.view.window.visible() {
                     self.hide_to_tray();
@@ -215,9 +228,29 @@ impl Radio {
             Event::Volume(volume) => {
                 self.settings.volume = volume;
                 if let Some(playing) = &self.playing {
-                    playing.playback.set_volume(volume);
+                    playing
+                        .playback
+                        .set_volume(if self.muted { 0 } else { volume });
                 }
                 self.save_at = Some(Instant::now() + Duration::from_millis(350));
+            }
+            Event::ToggleMute => {
+                self.muted = !self.muted;
+                self.view.mute.set_label(if self.muted {
+                    "@radio_muted"
+                } else {
+                    "@radio_speaker"
+                });
+                self.view.mute.set_tooltip(if self.muted {
+                    self.view.texts.unmute
+                } else {
+                    self.view.texts.mute
+                });
+                if let Some(playing) = &self.playing {
+                    playing
+                        .playback
+                        .set_volume(if self.muted { 0 } else { self.settings.volume });
+                }
             }
             Event::Timer => {
                 show_dialog(
@@ -317,6 +350,7 @@ impl Radio {
             self.view.window.force_position(true);
         }
         show_window(&mut self.view.window, self.settings.always_on_top);
+        window_order::show_in_taskbar(&self.view.window);
     }
 
     fn hide_to_tray(&mut self) {
@@ -529,7 +563,7 @@ impl Radio {
         self.playback_id += 1;
         match Playback::start(
             url.clone(),
-            self.settings.volume,
+            if self.muted { 0 } else { self.settings.volume },
             self.playback_id,
             self.messages,
             self.view.texts,
@@ -695,6 +729,7 @@ struct View {
     play: Button,
     stop: Button,
     volume: ValueSlider,
+    mute: Button,
     favorite: Button,
     remove: Button,
     timer_button: Button,
@@ -724,6 +759,20 @@ impl View {
         app::add_symbol("radio_play", true, draw_play).expect("register play symbol");
         app::add_symbol("radio_stop", true, draw_stop).expect("register stop symbol");
         app::add_symbol("radio_gear", true, draw_gear).expect("register gear symbol");
+        app::add_symbol("radio_close", true, draw_close).expect("register close symbol");
+        app::add_symbol("radio_minimize", true, draw_minimize).expect("register minimize symbol");
+        app::add_symbol("radio_file", true, draw_file).expect("register file symbol");
+        app::add_symbol("radio_info", true, draw_info).expect("register info symbol");
+        app::add_symbol("radio_add", true, draw_add).expect("register add symbol");
+        app::add_symbol("radio_muted", true, |color| {
+            draw_speaker(color);
+            draw::set_draw_color(color);
+            draw::begin_line();
+            draw::vertex(-0.9, 0.9);
+            draw::vertex(0.9, -0.9);
+            draw::end_line();
+        })
+        .expect("register muted symbol");
         app::add_symbol("radio_star", true, |color| draw_star(color, true))
             .expect("register star symbol");
         app::add_symbol("radio_star_outline", true, |color| draw_star(color, false))
@@ -733,27 +782,35 @@ impl View {
             .center_screen()
             .with_label("Screacher Radio");
         window.set_border(false);
-        let mut menu = MenuBar::new(12, 12, 530, 28, None);
-        for (label, event) in [
-            (texts.menu_add, Event::Add),
-            (texts.menu_settings, Event::Settings),
-            (texts.menu_quit, Event::Quit),
+        let mut menu = MenuBar::new(12, 12, 490, 28, None);
+        for (label, symbol, event) in [
+            (texts.menu_add, "radio_add", Event::Add),
+            (texts.menu_settings, "radio_gear", Event::Settings),
+            (texts.menu_quit, "radio_close", Event::Quit),
         ] {
-            menu.add(label, Shortcut::None, MenuFlag::Normal, move |_| {
-                messages.send(event.clone());
-            });
+            menu.add(
+                &menu_label(label, "radio_file", symbol),
+                Shortcut::None,
+                MenuFlag::Normal,
+                move |_| {
+                    messages.send(event.clone());
+                },
+            );
         }
         menu.add(
-            texts.menu_about,
+            &menu_label(texts.menu_about, "radio_info", "radio_info"),
             Shortcut::None,
             MenuFlag::Normal,
             move |_| {
                 messages.send(Event::About);
             },
         );
-        let mut settings_button = Button::new(550, 12, 38, 28, "@radio_gear");
-        settings_button.set_tooltip(texts.settings);
-        settings_button.emit(messages, Event::Settings);
+        let mut minimize_button = Button::new(510, 12, 34, 28, "@radio_minimize");
+        minimize_button.set_tooltip(texts.minimize_window);
+        minimize_button.emit(messages, Event::MinimizeWindow);
+        let mut close_button = Button::new(552, 12, 36, 28, "@radio_close");
+        close_button.set_tooltip(texts.close);
+        close_button.emit(messages, Event::Quit);
         let mut search = Input::new(62, 52, 390, 28, texts.search);
         search.set_trigger(CallbackTrigger::Changed);
         search.set_callback(move |_| messages.send(Event::Search));
@@ -783,9 +840,12 @@ impl View {
         let mut stop = Button::new(96, 344, 76, 28, "@radio_stop");
         stop.set_tooltip(texts.stop);
         stop.emit(messages, Event::Stop);
-        Frame::new(207, 344, 24, 28, "@radio_speaker").set_tooltip(texts.volume);
+        let mut mute = Button::new(203, 344, 28, 28, "@radio_speaker");
+        mute.set_frame(FrameType::FlatBox);
+        mute.set_tooltip(texts.mute);
+        mute.emit(messages, Event::ToggleMute);
         let mut volume = ValueSlider::new(237, 344, 198, 28, None);
-        volume.set_tooltip(texts.volume_wheel);
+        volume.set_tooltip(&format!("{} — {}", texts.volume, texts.volume_wheel));
         volume.set_type(SliderType::Horizontal);
         volume.set_range(0.0, 100.0);
         volume.set_precision(0);
@@ -866,6 +926,14 @@ impl View {
             false
         });
         window.set_icon(Some(icon::window()));
+        round_window(&mut window);
+        let mut shape_size = (window.w(), window.h());
+        window.resize_callback(move |window, _, _, w, h| {
+            if (w, h) != shape_size && w > 0 && h > 0 {
+                shape_size = (w, h);
+                round_window(window);
+            }
+        });
 
         let mut add_window = Window::default()
             .with_size(475, 143)
@@ -990,6 +1058,7 @@ impl View {
             play,
             stop,
             volume,
+            mute,
             favorite,
             remove,
             timer_button,
@@ -1126,6 +1195,36 @@ impl View {
     }
 }
 
+fn menu_label(path: &str, parent_symbol: &str, item_symbol: &str) -> String {
+    let (parent, item) = path.split_once('/').expect("translated menu path");
+    format!("@{parent_symbol}  {parent}  /@{item_symbol}  {item}  ")
+}
+
+fn round_window(window: &mut Window) {
+    let (width, height) = (window.w() as usize, window.h() as usize);
+    let radius = 5.min(width / 2).min(height / 2);
+    let mut mask = vec![255u8; width * height];
+    for y in 0..radius {
+        for x in 0..radius {
+            let dx = radius as f64 - x as f64 - 0.5;
+            let dy = radius as f64 - y as f64 - 0.5;
+            if dx * dx + dy * dy > (radius * radius) as f64 {
+                for (px, py) in [
+                    (x, y),
+                    (width - 1 - x, y),
+                    (x, height - 1 - y),
+                    (width - 1 - x, height - 1 - y),
+                ] {
+                    mask[py * width + px] = 0;
+                }
+            }
+        }
+    }
+    let image =
+        RgbImage::new(&mask, window.w(), window.h(), ColorDepth::L8).expect("rounded window shape");
+    window.set_shape(Some(image));
+}
+
 fn menu_entry_at(menu: &MenuBar, x: i32) -> bool {
     // Match FLTK's menu bar layout, including padding around each top-level entry.
     let mut left = menu.x() + 6;
@@ -1256,6 +1355,71 @@ fn draw_clock(color: Color) {
     draw::vertex(0.0, 0.0);
     draw::vertex(0.35, 0.22);
     draw::end_line();
+}
+
+fn draw_close(color: Color) {
+    draw::set_draw_color(color);
+    for (start, end) in [
+        ((-0.55, -0.55), (0.55, 0.55)),
+        ((-0.55, 0.55), (0.55, -0.55)),
+    ] {
+        draw::begin_line();
+        draw::vertex(start.0, start.1);
+        draw::vertex(end.0, end.1);
+        draw::end_line();
+    }
+}
+
+fn draw_minimize(color: Color) {
+    draw::set_draw_color(color);
+    draw::begin_line();
+    draw::vertex(-0.6, 0.45);
+    draw::vertex(0.6, 0.45);
+    draw::end_line();
+}
+
+fn draw_file(color: Color) {
+    draw::set_draw_color(color);
+    draw::begin_loop();
+    for (x, y) in [
+        (-0.6, -0.8),
+        (0.2, -0.8),
+        (0.6, -0.4),
+        (0.6, 0.8),
+        (-0.6, 0.8),
+    ] {
+        draw::vertex(x, y);
+    }
+    draw::end_loop();
+    draw::begin_line();
+    for (x, y) in [(0.2, -0.8), (0.2, -0.4), (0.6, -0.4)] {
+        draw::vertex(x, y);
+    }
+    draw::end_line();
+}
+
+fn draw_info(color: Color) {
+    draw::set_draw_color(color);
+    draw::begin_line();
+    draw::draw_arc2(0.0, 0.0, 0.8, 0.0, 360.0);
+    draw::end_line();
+    draw::begin_line();
+    draw::vertex(0.0, -0.15);
+    draw::vertex(0.0, 0.5);
+    draw::end_line();
+    draw::begin_polygon();
+    draw::draw_arc2(0.0, -0.45, 0.08, 0.0, 360.0);
+    draw::end_polygon();
+}
+
+fn draw_add(color: Color) {
+    draw::set_draw_color(color);
+    for (start, end) in [((-0.65, 0.0), (0.65, 0.0)), ((0.0, -0.65), (0.0, 0.65))] {
+        draw::begin_line();
+        draw::vertex(start.0, start.1);
+        draw::vertex(end.0, end.1);
+        draw::end_line();
+    }
 }
 
 fn draw_gear(color: Color) {
