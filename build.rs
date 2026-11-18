@@ -39,6 +39,47 @@ fn main() {
         let pixels = downscale(&rgba, info.width as usize, size);
         fs::write(output.join(format!("icon-{size}.rgba")), pixels).expect("write RGBA icon");
     }
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let icon_path = output.join("screacher-radio.ico");
+        let mut images = Vec::new();
+        for size in [16, 32, 64, 256] {
+            let pixels = downscale(&rgba, info.width as usize, size);
+            let mut image = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut image, size as u32, size as u32);
+                encoder.set_color(png::ColorType::Rgba);
+                encoder.set_depth(png::BitDepth::Eight);
+                encoder
+                    .write_header()
+                    .expect("write icon header")
+                    .write_image_data(&pixels)
+                    .expect("encode icon size");
+            }
+            images.push((size, image));
+        }
+        let mut ico = vec![0, 0, 1, 0, images.len() as u8, 0];
+        let mut offset = 6 + 16 * images.len() as u32;
+        for (size, image) in &images {
+            ico.extend([*size as u8, *size as u8, 0, 0]);
+            ico.extend(1u16.to_le_bytes());
+            ico.extend(32u16.to_le_bytes());
+            ico.extend((image.len() as u32).to_le_bytes());
+            ico.extend(offset.to_le_bytes());
+            offset += image.len() as u32;
+        }
+        for (_, image) in images {
+            ico.extend(image);
+        }
+        fs::write(&icon_path, ico).expect("write Windows icon");
+        winresource::WindowsResource::new()
+            .set_icon(icon_path.to_str().expect("icon path"))
+            .set("FileDescription", "Screacher Radio")
+            .set("ProductName", "Screacher Radio")
+            .set("FileVersion", &version)
+            .set("ProductVersion", &version)
+            .compile()
+            .expect("compile Windows icon resource");
+    }
 }
 
 fn downscale(source: &[u8], width: usize, size: usize) -> Vec<u8> {

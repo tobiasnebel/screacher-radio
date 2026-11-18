@@ -44,6 +44,17 @@ impl Palette {
                 Tooltip::set_text_color(Color::Foreground);
                 [(132, 235, 158), (49, 55, 53), (106, 141, 114), (41, 76, 57)]
             }
+            Theme::Light => {
+                app::background(242, 240, 234);
+                Tooltip::set_color(Color::Background2);
+                Tooltip::set_text_color(Color::Foreground);
+                [
+                    (34, 73, 124),
+                    (250, 249, 246),
+                    (123, 142, 163),
+                    (199, 217, 237),
+                ]
+            }
         };
         for (color, (r, g, b)) in PALETTE_COLORS.into_iter().zip(colors) {
             app::set_color(color, r, g, b);

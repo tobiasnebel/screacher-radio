@@ -822,16 +822,27 @@ impl View {
                 _ => Event::Quit,
             });
         });
+        let drag_menu = menu.clone();
+        let drag_panel = stream_info.panel.clone();
+        let drag_status = status.clone();
+        let drag_meter = meter.frame.clone();
         let mut drag_offset = None;
+        // Catch drag areas before child widgets such as the menu bar consume the mouse event.
+        window.super_handle_first(false);
         window.handle(move |window, event| {
             match event {
                 FltkEvent::Push
                     if app::event_mouse_button() == app::MouseButton::Left
-                        && !(0..window.children()).any(|index| {
-                            window.child(index).is_some_and(|child| {
-                                child.visible() && app::event_inside_widget(&child)
-                            })
-                        }) =>
+                        && (app::event_inside_widget(&drag_panel)
+                            || app::event_inside_widget(&drag_status)
+                            || app::event_inside_widget(&drag_meter)
+                            || (app::event_inside_widget(&drag_menu)
+                                && !menu_entry_at(&drag_menu, app::event_x()))
+                            || !(0..window.children()).any(|index| {
+                                window.child(index).is_some_and(|child| {
+                                    child.visible() && app::event_inside_widget(&child)
+                                })
+                            })) =>
                 {
                     drag_offset = Some((
                         app::event_x_root() - window.x(),
@@ -908,13 +919,20 @@ impl View {
         on_top.set_value(settings.always_on_top);
         on_top.set_callback(move |button| messages.send(Event::AlwaysOnTop(button.value())));
         let mut theme = Choice::new(90, 104, 154, 28, texts.theme);
-        theme.add_choice(&format!("{}|{}", texts.theme_standard, texts.theme_dark));
-        theme.set_value(i32::from(settings.theme == Theme::Dark));
+        theme.add_choice(&format!(
+            "{}|{}|{}",
+            texts.theme_standard, texts.theme_dark, texts.theme_light
+        ));
+        theme.set_value(match settings.theme {
+            Theme::Standard => 0,
+            Theme::Dark => 1,
+            Theme::Light => 2,
+        });
         theme.set_callback(move |choice| {
-            let theme = if choice.value() == 1 {
-                Theme::Dark
-            } else {
-                Theme::Standard
+            let theme = match choice.value() {
+                1 => Theme::Dark,
+                2 => Theme::Light,
+                _ => Theme::Standard,
             };
             messages.send(Event::ThemeChanged(theme));
         });
@@ -1054,12 +1072,12 @@ impl View {
 
     fn apply_theme(&mut self, theme: Theme) {
         self.palette.apply(theme);
-        self.volume.set_color(if theme == Theme::Dark {
+        self.volume.set_color(if theme != Theme::Standard {
             Color::Background2
         } else {
             Color::Background
         });
-        self.empty.set_label_color(if theme == Theme::Dark {
+        self.empty.set_label_color(if theme != Theme::Standard {
             Color::Foreground
         } else {
             Color::Dark3
@@ -1108,7 +1126,26 @@ impl View {
     }
 }
 
+fn menu_entry_at(menu: &MenuBar, x: i32) -> bool {
+    // Match FLTK's menu bar layout, including padding around each top-level entry.
+    let mut left = menu.x() + 6;
+    let mut item = menu.at(0);
+    while let Some(entry) = item {
+        if entry.label().is_none() {
+            break;
+        }
+        let right = left + entry.measure().0 + 16;
+        if x >= left && x < right {
+            return true;
+        }
+        left = right;
+        item = entry.next(1);
+    }
+    false
+}
+
 struct StreamInfo {
+    panel: Group,
     title: Output,
     artist: Output,
     elapsed: Output,
@@ -1135,6 +1172,7 @@ impl StreamInfo {
         });
         panel.end();
         Self {
+            panel,
             title,
             artist,
             elapsed,
@@ -1317,6 +1355,7 @@ impl StereoMeter {
         self.inactive_color.set(match theme {
             Theme::Standard => Color::from_rgb(214, 220, 222),
             Theme::Dark => Color::from_rgb(58, 68, 63),
+            Theme::Light => Color::from_rgb(214, 224, 235),
         });
     }
 

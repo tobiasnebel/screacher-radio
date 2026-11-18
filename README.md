@@ -4,7 +4,8 @@ Kleiner Webradio-Player in Rust mit FLTK für Windows und Linux.
 
 ## Bedienung
 
-- Das Hauptfenster lässt sich mit gedrückter linker Maustaste auf einer freien Fläche verschieben. **Datei → Beenden** schließt den Player.
+- Das Hauptfenster lässt sich mit gedrückter linker Maustaste auf einer freien Fläche, im Streaminfo-Panel, auf der Statuszeile und auf freien Stellen der Menüleiste verschieben. **Datei → Beenden** schließt den Player.
+- Das Theme **Light** unter **Einstellungen → Theme** verwendet einen perlmuttweißen Hintergrund mit blauer Schrift.
 - Unter **Hinzufügen…** einen Namen und eine HTTP(S)-URL angeben. Direkte MP3-Streams sowie M3U- und PLS-Playlists werden unterstützt. Eine Playlist erscheint als ein Sender und spielt ihren ersten Stream.
 - Das Dreieck startet den ausgewählten Sender, das Quadrat stoppt die Wiedergabe. Beim Programmstart ist der zuletzt erfolgreich gespielte Sender vorausgewählt.
 - Rechts neben der Senderliste stehen die Laufzeit seit Wiedergabestart und, wenn der Stream ICY-Metadaten liefert, Titel und Interpret. Ein Eintrag der Form `Interpret - Titel` wird in beide Felder aufgeteilt.
@@ -51,6 +52,14 @@ docker build --output type=local,dest=dist/linux .
 sudo apt install libasound2t64 libfontconfig1 libx11-6 libxcursor1 libxext6 libxfixes3 libxft2 libxinerama1 libxrandr2 libxrender1
 chmod +x dist/linux/screacher-radio
 ./dist/linux/screacher-radio
+```
+
+Das Linux-Archiv enthält einen Desktop-Starter und das Logo für den Anwendungsstarter. Die Installation für den eigenen Benutzer erfolgt aus dem entpackten Verzeichnis. Der Ordner `~/.local/bin` muss im `PATH` der Desktop-Sitzung enthalten sein.
+
+```bash
+install -Dm755 screacher-radio ~/.local/bin/screacher-radio
+install -Dm644 screacher-radio.desktop ~/.local/share/applications/screacher-radio.desktop
+install -Dm644 screacher-radio.png ~/.local/share/icons/hicolor/512x512/apps/screacher-radio.png
 ```
 
 ## Screenshots

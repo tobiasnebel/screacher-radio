@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Screacher Radio
+Comment=Lightweight web radio player
+Exec=screacher-radio
+Icon=screacher-radio
+Terminal=false
+Categories=AudioVideo;Audio;Player;

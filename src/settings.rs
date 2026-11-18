@@ -27,6 +27,7 @@ pub enum Theme {
     #[default]
     Standard,
     Dark,
+    Light,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -180,6 +181,10 @@ mod tests {
         assert_eq!(restored.language, Language::German);
         assert_eq!(restored.audio_device.as_deref(), Some("wasapi:test-device"));
         assert!(restored.always_on_top);
+        settings.theme = Theme::Light;
+        let restored: Settings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.theme, Theme::Light);
     }
 
     #[test]

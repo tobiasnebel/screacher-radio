@@ -53,7 +53,7 @@ jobs:
           --output type=local,dest=dist/linux .
 
       - name: Package the executable
-        run: tar -czf screacher-radio-linux-x86_64.tar.gz -C dist/linux screacher-radio
+        run: tar -czf screacher-radio-linux-x86_64.tar.gz -C dist/linux screacher-radio screacher-radio.desktop screacher-radio.png
 
       - name: Upload Linux archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

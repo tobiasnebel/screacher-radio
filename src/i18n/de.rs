@@ -32,6 +32,7 @@ pub(super) static TEXTS: Texts = Texts {
     theme: "Theme",
     theme_standard: "Standard",
     theme_dark: "Dunkel",
+    theme_light: "Light",
     language: "Sprache",
     language_system: "System",
     close: "Schließen",

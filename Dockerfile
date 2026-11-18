@@ -14,3 +14,5 @@ RUN cargo test --release --locked && cargo build --release --locked
 
 FROM scratch AS binary
 COPY --from=build /app/target/release/screacher-radio /screacher-radio
+COPY media/icons/screacher-radio-icon-512.png /screacher-radio.png
+COPY media/linux/screacher-radio.desktop /screacher-radio.desktop

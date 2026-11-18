@@ -5,5 +5,7 @@
 !media/
 !media/icons/
 !media/icons/screacher-radio-icon-512.png
+!media/linux/
+!media/linux/screacher-radio.desktop
 !src/
 !src/**

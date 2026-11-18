@@ -99,6 +99,7 @@ pub struct Texts {
     pub theme: &'static str,
     pub theme_standard: &'static str,
     pub theme_dark: &'static str,
+    pub theme_light: &'static str,
     pub language: &'static str,
     pub language_system: &'static str,
     pub close: &'static str,
