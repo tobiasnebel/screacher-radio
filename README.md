@@ -2,6 +2,8 @@
 
 Kleiner Webradio-Player in Rust mit FLTK für Windows und Linux.
 
+Pro Benutzer läuft eine Instanz. Ein erneuter Start holt den laufenden Player aus dem Tray oder der Taskleiste hervor und fordert den Fokus für sein Fenster an. Nach einem Absturz wird die Instanzsperre automatisch freigegeben.
+
 ## Bedienung
 
 - Das Hauptfenster mit leicht gerundeten Ecken lässt sich mit gedrückter linker Maustaste auf einer freien Fläche, im Streaminfo-Panel, auf der Statuszeile und auf freien Stellen der Menüleiste verschieben. Oben rechts minimiert der Strich den Player gemäß der Tray-Einstellung. Das Kreuz und **Datei → Beenden** schließen den Player.

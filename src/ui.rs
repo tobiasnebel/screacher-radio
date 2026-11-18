@@ -32,6 +32,7 @@ use crate::{
     metadata::TrackInfo,
     playback::{OutputDevice, Playback, PlaybackEvent, output_devices},
     settings::{self, Settings, Station, Theme},
+    single_instance::Instance,
     station::station_url,
     theme::Palette,
     tray::Tray,
@@ -42,6 +43,7 @@ use crate::{
 pub enum Event {
     Quit,
     Show,
+    Activate,
     Minimized,
     MinimizeWindow,
     Escape,
@@ -75,6 +77,16 @@ pub fn run() {
     let _app = app::App::default().with_scheme(app::Scheme::Gtk);
     app::set_visible_focus(false);
     let (messages, events) = app::channel::<Event>();
+    let _instance = match Instance::acquire(move || messages.send(Event::Activate)) {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => {
+            dialog::alert_default(&(Language::English.texts().instance_failed)(
+                &error.to_string(),
+            ));
+            return;
+        }
+    };
     let (path, mut settings, warning) = match Settings::path(Language::English.texts())
         .and_then(|path| Settings::load(&path).map(|settings| (path, settings)))
     {
@@ -175,6 +187,14 @@ impl Radio {
         match event {
             Event::Quit => unreachable!(),
             Event::Show => self.show(),
+            Event::Activate => {
+                self.show();
+                if let Some(dialog) = app::modal() {
+                    window_order::activate(&dialog);
+                } else {
+                    window_order::activate(&self.view.window);
+                }
+            }
             Event::MinimizeWindow => {
                 if self.settings.minimize_to_tray && self.tray_available {
                     self.hide_to_tray();

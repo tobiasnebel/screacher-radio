@@ -144,6 +144,7 @@ pub struct Texts {
     pub default_audio_device: &'static str,
     pub opening_timeout: &'static str,
     pub settings_load_failed: fn(&str) -> String,
+    pub instance_failed: fn(&str) -> String,
     pub stations_load_failed: fn(&str) -> String,
     pub confirm_delete: fn(&str) -> String,
     pub stations_save_failed: fn(&str, &str) -> String,

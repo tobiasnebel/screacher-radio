@@ -81,6 +81,9 @@ pub(super) static TEXTS: Texts = Texts {
             "Einstellungen konnten nicht geladen werden. Änderungen an den Einstellungen gelten nur für diese Sitzung.\n{error}"
         )
     },
+    instance_failed: |error| {
+        format!("Der Player konnte nicht gestartet oder aktiviert werden.\n{error}")
+    },
     stations_load_failed: |error| {
         format!(
             "stations.yaml neben der Programmdatei konnte nicht geladen oder erstellt werden.\n{error}"

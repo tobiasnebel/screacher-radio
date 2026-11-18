@@ -1,5 +1,59 @@
 use fltk::{prelude::*, window::Window};
 
+pub fn activate(window: &impl WindowExt) {
+    activate_native(window);
+}
+
+#[cfg(windows)]
+fn activate_native(window: &impl WindowExt) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+
+    // A secondary launch grants this process foreground permission before requesting activation.
+    unsafe {
+        SetForegroundWindow(window.raw_handle());
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn activate_native(window: &impl WindowExt) {
+    use std::{mem::MaybeUninit, os::raw::c_ulong};
+    use x11::xlib;
+
+    let display = fltk::app::display().cast::<xlib::Display>();
+    let xid = window.raw_handle() as xlib::Window;
+    // Ask the window manager to activate the restored X11/XWayland window.
+    unsafe {
+        let mut attributes = MaybeUninit::<xlib::XWindowAttributes>::uninit();
+        if xlib::XGetWindowAttributes(display, xid, attributes.as_mut_ptr()) == 0 {
+            return;
+        }
+        let atom = xlib::XInternAtom(display, c"_NET_ACTIVE_WINDOW".as_ptr(), xlib::False);
+        let mut event = xlib::XEvent {
+            client_message: xlib::XClientMessageEvent {
+                type_: xlib::ClientMessage,
+                serial: 0,
+                send_event: xlib::True,
+                display,
+                window: xid,
+                message_type: atom,
+                format: 32,
+                data: xlib::ClientMessageData::from([1 as c_ulong, xlib::CurrentTime, 0, 0, 0]),
+            },
+        };
+        xlib::XSendEvent(
+            display,
+            attributes.assume_init().root,
+            xlib::False,
+            xlib::SubstructureNotifyMask | xlib::SubstructureRedirectMask,
+            &mut event,
+        );
+        xlib::XFlush(display);
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn activate_native(_: &impl WindowExt) {}
+
 #[cfg(windows)]
 pub fn show_in_taskbar(window: &Window) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{

@@ -5,6 +5,7 @@ mod icon;
 mod metadata;
 mod playback;
 mod settings;
+mod single_instance;
 mod station;
 mod theme;
 mod tray;

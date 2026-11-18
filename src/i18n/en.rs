@@ -79,6 +79,7 @@ pub(super) static TEXTS: Texts = Texts {
     settings_load_failed: |error| {
         format!("Could not load settings. Changes to settings apply only to this session.\n{error}")
     },
+    instance_failed: |error| format!("Could not start or activate the player.\n{error}"),
     stations_load_failed: |error| {
         format!("Could not load or create stations.yaml next to the executable.\n{error}")
     },
