@@ -69,4 +69,4 @@ install -Dm644 screacher-radio.png ~/.local/share/icons/hicolor/512x512/apps/scr
 
 ## Screenshots
 
-![Main Window](./screenshots/main_window.png "Main Window")
+![Main Window](./media/screenshots/main_window.png "Main Window")
