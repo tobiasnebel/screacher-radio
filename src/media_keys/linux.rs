@@ -13,7 +13,7 @@ use zbus::{
     zvariant::{ObjectPath, Value},
 };
 
-use crate::{station::BoxError, ui::Event};
+use crate::{media_keys::MediaKey, station::BoxError, ui::Event};
 
 const PATH: &str = "/org/mpris/MediaPlayer2";
 const PLAYER: &str = "org.mpris.MediaPlayer2.Player";
@@ -121,13 +121,13 @@ struct MediaPlayer {
 #[zbus::interface(name = "org.mpris.MediaPlayer2.Player")]
 impl MediaPlayer {
     fn play_pause(&self) {
-        self.messages.send(Event::TogglePlayback);
+        self.messages.send(Event::MediaKey(MediaKey::Toggle));
     }
     fn play(&self) {
-        self.messages.send(Event::MediaPlay);
+        self.messages.send(Event::MediaKey(MediaKey::Play));
     }
     fn pause(&self) {
-        self.messages.send(Event::Stop);
+        self.messages.send(Event::MediaKey(MediaKey::Pause));
     }
     fn stop(&self) {
         self.messages.send(Event::Stop);
@@ -238,16 +238,25 @@ mod tests {
             "Stopped"
         );
         let _: () = player.call("PlayPause", &()).unwrap();
-        assert!(matches!(events.recv(), Some(Event::TogglePlayback)));
+        assert!(matches!(
+            events.recv(),
+            Some(Event::MediaKey(MediaKey::Toggle))
+        ));
         media.update(true, 60).unwrap();
         assert_eq!(
             player.get_property::<String>("PlaybackStatus").unwrap(),
             "Playing"
         );
         let _: () = player.call("Pause", &()).unwrap();
-        assert!(matches!(events.recv(), Some(Event::Stop)));
+        assert!(matches!(
+            events.recv(),
+            Some(Event::MediaKey(MediaKey::Pause))
+        ));
         let _: () = player.call("Play", &()).unwrap();
-        assert!(matches!(events.recv(), Some(Event::MediaPlay)));
+        assert!(matches!(
+            events.recv(),
+            Some(Event::MediaKey(MediaKey::Play))
+        ));
         assert!(!player.get_property::<bool>("CanGoNext").unwrap());
         assert!(!player.get_property::<bool>("CanSeek").unwrap());
         player.set_property("Volume", 0.3f64).unwrap();

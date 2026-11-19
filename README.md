@@ -14,7 +14,7 @@ A small, lightweight web radio player with a minimalistic interface.
 - ⏲️ Sleep timer with presets and extensions
 - 🎧 Audio-device selection
 - 🎨 Simple themes: Standard, Dark & Light
-- ⏯️ Media-key controls, including while minimized
+- ⏯️ Configurable Play/Pause media key: playback control or show/minimize the player
 - 🔁 Optional autoplay of the last station
 - 🔊 Volume control, mute & stereo level meters
 - 📝 Track information when available

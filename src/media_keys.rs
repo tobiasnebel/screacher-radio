@@ -6,3 +6,11 @@ mod platform;
 mod platform;
 
 pub use platform::MediaKeys;
+
+#[derive(Clone, Copy)]
+pub enum MediaKey {
+    Play,
+    Pause,
+    #[cfg(target_os = "linux")]
+    Toggle,
+}

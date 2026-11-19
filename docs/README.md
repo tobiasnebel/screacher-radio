@@ -8,6 +8,7 @@ Pro Benutzer läuft eine Instanz. Ein erneuter Start holt den laufenden Player a
 
 - **Letzten Sender beim Programmstart abspielen** unter **Einstellungen** aktiviert Autoplay. Die Option ist anfangs ausgeschaltet und startet nur einen noch vorhandenen zuletzt gespielten Sender.
 - Die Medientaste **Play/Pause** startet bzw. stoppt den Stream auch bei minimiertem Fenster oder im Tray. Unter Linux benötigt der Desktop MPRIS-Unterstützung und einen D-Bus-Sitzungsbus.
+- Unter **Einstellungen → Play-Medientaste** lässt sich alternativ **Player anzeigen oder minimieren** wählen. Die Wiedergabe bleibt dabei unverändert; zum Minimieren gilt die vorhandene Tray-Einstellung. Änderungen werden sofort übernommen und gespeichert.
 - Das Hauptfenster mit leicht gerundeten Ecken lässt sich mit gedrückter linker Maustaste auf einer freien Fläche, im Streaminfo-Panel, auf der Statuszeile und auf freien Stellen der Menüleiste verschieben. Oben rechts minimiert der Strich den Player gemäß der Tray-Einstellung. Das Kreuz und **Datei → Beenden** schließen den Player.
 - Das Theme **Light** unter **Einstellungen → Theme** verwendet einen perlmuttweißen Hintergrund mit blauer Schrift.
 - Unter **Hinzufügen…** einen Namen und eine HTTP(S)-URL angeben. Direkte MP3-Streams sowie M3U- und PLS-Playlists werden unterstützt. Eine Playlist erscheint als ein Sender und spielt ihren ersten Stream.

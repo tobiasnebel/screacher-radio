@@ -10,7 +10,7 @@ use windows::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow};
 
-use crate::{station::BoxError, ui::Event};
+use crate::{media_keys::MediaKey, station::BoxError, ui::Event};
 
 pub struct MediaKeys {
     controls: SystemMediaTransportControls,
@@ -45,9 +45,13 @@ impl MediaKeys {
             >| {
                 let button = args.ok()?.Button()?;
                 let event = match button {
-                    SystemMediaTransportControlsButton::Play => Some(Event::MediaPlay),
-                    SystemMediaTransportControlsButton::Pause
-                    | SystemMediaTransportControlsButton::Stop => Some(Event::Stop),
+                    SystemMediaTransportControlsButton::Play => {
+                        Some(Event::MediaKey(MediaKey::Play))
+                    }
+                    SystemMediaTransportControlsButton::Pause => {
+                        Some(Event::MediaKey(MediaKey::Pause))
+                    }
+                    SystemMediaTransportControlsButton::Stop => Some(Event::Stop),
                     _ => None,
                 };
                 if let Some(event) = event {
@@ -187,17 +191,17 @@ mod tests {
         };
         window.iconize();
         assert!(session.TryPlayAsync().unwrap().join().unwrap());
-        assert!(matches!(receive(), Event::MediaPlay));
+        assert!(matches!(receive(), Event::MediaKey(MediaKey::Play)));
         media.update(true, 75).unwrap();
         assert!(session.TryPauseAsync().unwrap().join().unwrap());
-        assert!(matches!(receive(), Event::Stop));
+        assert!(matches!(receive(), Event::MediaKey(MediaKey::Pause)));
         media.update(false, 75).unwrap();
         window.hide();
         assert!(!window.shown());
         assert!(session.TryPlayAsync().unwrap().join().unwrap());
-        assert!(matches!(receive(), Event::MediaPlay));
+        assert!(matches!(receive(), Event::MediaKey(MediaKey::Play)));
         media.update(true, 75).unwrap();
         assert!(session.TryPauseAsync().unwrap().join().unwrap());
-        assert!(matches!(receive(), Event::Stop));
+        assert!(matches!(receive(), Event::MediaKey(MediaKey::Pause)));
     }
 }

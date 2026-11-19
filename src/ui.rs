@@ -29,10 +29,10 @@ use url::Url;
 use crate::{
     i18n::{Language, Texts},
     icon,
-    media_keys::MediaKeys,
+    media_keys::{MediaKey, MediaKeys},
     metadata::TrackInfo,
     playback::{OutputDevice, Playback, PlaybackEvent, output_devices},
-    settings::{self, Settings, Station, Theme},
+    settings::{self, MediaKeyAction, Settings, Station, Theme},
     single_instance::Instance,
     station::station_url,
     theme::Palette,
@@ -60,9 +60,8 @@ pub enum Event {
     Stop,
     Volume(u8),
     ToggleMute,
-    #[cfg(target_os = "linux")]
-    TogglePlayback,
-    MediaPlay,
+    MediaKey(MediaKey),
+    MediaKeyActionChanged(MediaKeyAction),
     AutoPlayLastStation(bool),
     Timer,
     StartTimer(Option<u64>),
@@ -214,13 +213,7 @@ impl Radio {
                     window_order::activate(&self.view.window);
                 }
             }
-            Event::MinimizeWindow => {
-                if self.settings.minimize_to_tray && self.tray_available {
-                    self.hide_to_tray();
-                } else {
-                    self.view.window.iconize();
-                }
-            }
+            Event::MinimizeWindow => self.minimize(),
             Event::Minimized => {
                 if self.view.window.shown() && !self.view.window.visible() {
                     self.hide_to_tray();
@@ -263,18 +256,10 @@ impl Radio {
                 }
             }
             Event::Play => self.play(),
-            Event::MediaPlay => {
-                if self.playing.is_none() {
-                    self.play();
-                }
-            }
-            #[cfg(target_os = "linux")]
-            Event::TogglePlayback => {
-                if self.playing.is_some() {
-                    self.stop(self.view.texts.playback_stopped);
-                } else {
-                    self.play();
-                }
+            Event::MediaKey(key) => self.media_key(key),
+            Event::MediaKeyActionChanged(action) => {
+                self.settings.media_key_action = action;
+                self.save();
             }
             Event::AutoPlayLastStation(enabled) => {
                 self.settings.auto_play_last_station = enabled;
@@ -379,6 +364,38 @@ impl Radio {
             self.view
                 .status(&(self.view.texts.media_keys_failed)(&error.to_string()));
             self.media_keys = None;
+        }
+    }
+
+    fn media_key(&mut self, key: MediaKey) {
+        if self.settings.media_key_action == MediaKeyAction::ToggleWindow {
+            if self.view.window.visible() {
+                self.minimize();
+            } else {
+                self.handle(Event::Activate);
+            }
+            return;
+        }
+        match key {
+            MediaKey::Play if self.playing.is_none() => self.play(),
+            MediaKey::Play => {}
+            MediaKey::Pause => self.stop(self.view.texts.playback_stopped),
+            #[cfg(target_os = "linux")]
+            MediaKey::Toggle => {
+                if self.playing.is_some() {
+                    self.stop(self.view.texts.playback_stopped);
+                } else {
+                    self.play();
+                }
+            }
+        }
+    }
+
+    fn minimize(&mut self) {
+        if self.settings.minimize_to_tray && self.tray_available {
+            self.hide_to_tray();
+        } else {
+            self.view.window.iconize();
         }
     }
 
@@ -1045,7 +1062,7 @@ impl View {
         timer_window.set_callback(|window| window.hide());
 
         let mut settings_window = Window::default()
-            .with_size(465, 330)
+            .with_size(465, 370)
             .with_label(texts.settings);
         let mut minimize = CheckButton::new(12, 12, 345, 28, texts.minimize_to_tray);
         minimize.set_value(settings.minimize_to_tray);
@@ -1096,7 +1113,22 @@ impl View {
         autoplay.set_value(settings.auto_play_last_station);
         autoplay
             .set_callback(move |button| messages.send(Event::AutoPlayLastStation(button.value())));
-        let mut close = Button::new(350, 288, 101, 28, texts.close);
+        let mut media_action = Choice::new(154, 283, 297, 28, texts.media_key_action);
+        for label in [texts.media_key_playback, texts.media_key_window] {
+            media_action.add_choice(label);
+        }
+        media_action.set_value(match settings.media_key_action {
+            MediaKeyAction::Playback => 0,
+            MediaKeyAction::ToggleWindow => 1,
+        });
+        media_action.set_callback(move |choice| {
+            let action = match choice.value() {
+                1 => MediaKeyAction::ToggleWindow,
+                _ => MediaKeyAction::Playback,
+            };
+            messages.send(Event::MediaKeyActionChanged(action));
+        });
+        let mut close = Button::new(350, 328, 101, 28, texts.close);
         let mut settings_dialog = settings_window.clone();
         close.set_callback(move |_| settings_dialog.hide());
         settings_window.end();
@@ -1607,6 +1639,68 @@ impl StereoMeter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires an interactive Windows desktop"]
+    fn media_keys_toggle_the_window_without_starting_playback() {
+        let _app = app::App::default();
+        let (messages, _events) = app::channel();
+        let settings = Settings {
+            media_key_action: MediaKeyAction::ToggleWindow,
+            ..Settings::default()
+        };
+        let mut radio = Radio {
+            view: View::new(messages, &settings, Language::English.texts()),
+            messages,
+            path: None,
+            settings,
+            stations_path: None,
+            stations: Vec::new(),
+            visible_stations: Vec::new(),
+            selected: None,
+            playing: None,
+            playback_id: 0,
+            timer: None,
+            save_at: None,
+            tray_available: true,
+            tray_position: None,
+            next_device_check: Instant::now(),
+            muted: false,
+            media_keys: None,
+        };
+        let wait_until = |condition: &dyn Fn() -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !condition() {
+                assert!(
+                    Instant::now() < deadline,
+                    "Window visibility did not change"
+                );
+                let _ = app::wait_for(0.02);
+            }
+        };
+        radio.show();
+        radio.handle(Event::MediaKey(MediaKey::Play));
+        wait_until(&|| !radio.view.window.visible());
+        assert!(radio.view.window.shown()); // Minimized to the taskbar.
+        radio.handle(Event::MediaKey(MediaKey::Play));
+        wait_until(&|| radio.view.window.visible());
+
+        radio.settings.minimize_to_tray = true;
+        let position = (radio.view.window.x(), radio.view.window.y());
+        radio.handle(Event::MediaKey(MediaKey::Pause));
+        assert!(!radio.view.window.shown());
+        radio.handle(Event::MediaKey(MediaKey::Pause));
+        wait_until(&|| radio.view.window.visible());
+        assert_eq!((radio.view.window.x(), radio.view.window.y()), position);
+        assert!(radio.playing.is_none());
+        assert_eq!(radio.playback_id, 0);
+
+        radio.handle(Event::MediaKeyActionChanged(MediaKeyAction::Playback));
+        radio.handle(Event::MediaKey(MediaKey::Pause));
+        assert!(radio.view.window.visible());
+        radio.view.window.hide();
+    }
 
     #[test]
     fn adds_minutes_to_the_running_deadline() {
