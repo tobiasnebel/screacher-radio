@@ -1007,6 +1007,10 @@ impl View {
                     drag_offset = None;
                     messages.send(Event::Minimized);
                 }
+                FltkEvent::Show => {
+                    round_window(window);
+                    window.redraw();
+                }
                 _ => {}
             }
             false
