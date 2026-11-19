@@ -42,6 +42,7 @@ pub struct Settings {
     pub theme: Theme,
     pub language: Language,
     pub audio_device: Option<String>,
+    pub auto_play_last_station: bool,
 }
 
 impl Default for Settings {
@@ -55,11 +56,21 @@ impl Default for Settings {
             theme: Theme::Standard,
             language: Language::default(),
             audio_device: None,
+            auto_play_last_station: false,
         }
     }
 }
 
 impl Settings {
+    pub fn autoplay_station_index(&self, stations: &[Station]) -> Option<usize> {
+        if !self.auto_play_last_station {
+            return None;
+        }
+        self.last_station
+            .as_ref()
+            .and_then(|last| stations.iter().position(|station| &station.url == last))
+    }
+
     pub fn path(texts: &Texts) -> io::Result<PathBuf> {
         let dirs = ProjectDirs::from("", "", "Screacher Radio")
             .ok_or_else(|| io::Error::other(texts.config_folder_missing))?;
@@ -169,17 +180,20 @@ mod tests {
         assert_eq!(settings.theme, Theme::Standard);
         assert_eq!(settings.language, Language::English);
         assert_eq!(settings.audio_device, None);
+        assert!(!settings.auto_play_last_station);
         assert!(!settings.always_on_top);
 
         settings.theme = Theme::Dark;
         settings.language = Language::German;
         settings.audio_device = Some("wasapi:test-device".into());
+        settings.auto_play_last_station = true;
         settings.always_on_top = true;
         let json = serde_json::to_string(&settings).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.theme, Theme::Dark);
         assert_eq!(restored.language, Language::German);
         assert_eq!(restored.audio_device.as_deref(), Some("wasapi:test-device"));
+        assert!(restored.auto_play_last_station);
         assert!(restored.always_on_top);
         settings.theme = Theme::Light;
         let restored: Settings =
@@ -221,5 +235,26 @@ mod tests {
         fs::write(&path, invalid_yaml).unwrap();
         assert!(load_stations(&path, &[], Language::English.texts()).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), invalid_yaml);
+    }
+
+    #[test]
+    fn autoplay_requires_an_enabled_option_and_an_available_last_station() {
+        let stations = vec![Station {
+            name: "Station".into(),
+            url: Url::parse("https://example.org/live").unwrap(),
+            favorite: false,
+        }];
+        let mut settings = Settings {
+            last_station: Some(stations[0].url.clone()),
+            ..Settings::default()
+        };
+        assert_eq!(settings.autoplay_station_index(&stations), None);
+        settings.auto_play_last_station = true;
+        assert_eq!(settings.autoplay_station_index(&stations), Some(0));
+        assert_eq!(settings.autoplay_station_index(&[]), None);
+        settings.last_station = Some(Url::parse("https://example.org/deleted").unwrap());
+        assert_eq!(settings.autoplay_station_index(&stations), None);
+        settings.last_station = None;
+        assert_eq!(settings.autoplay_station_index(&stations), None);
     }
 }

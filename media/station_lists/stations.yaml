@@ -1,0 +1,24 @@
+- name: Bassdrive
+  url: https://www.bassdrive.com/bassdrive.m3u
+  favorite: true
+- name: Disco Fetish
+  url: https://radio.intergalactic.fm/2
+  favorite: true
+- name: JungleTrain
+  url: https://jungletrain.net/128kbps.pls
+  favorite: false
+- name: Cosmic Fuzz FM
+  url: https://26343.live.streamtheworld.com/SAM04AAC335_SC
+  favorite: false
+- name: "SomaFM :: Vaporwaves"
+  url: https://somafm.com/vaporwaves.pls
+  favorite: false
+- name: "SomaFM :: Defcon"
+  url: https://somafm.com/defcon.pls
+  favorite: false
+- name: "SomaFM :: n5md"
+  url: https://somafm.com/n5md.pls
+  favorite: false
+- name: "SomaFM :: Secret Agent"
+  url: https://somafm.com/secretagent.pls
+  favorite: false

@@ -2,6 +2,7 @@
 
 mod i18n;
 mod icon;
+mod media_keys;
 mod metadata;
 mod playback;
 mod settings;

@@ -32,6 +32,8 @@ pub(super) static TEXTS: Texts = Texts {
     restart_language: "Die Sprache ändert sich nach einem Neustart.",
     minimize_to_tray: "Beim Minimieren in den Tray verschieben",
     always_on_top: "Immer im Vordergrund",
+    auto_play_last_station: "Letzten Sender beim Programmstart abspielen",
+    media_keys_failed: |error| format!("Mediensteuerung nicht verfügbar: {error}"),
     theme: "Theme",
     theme_standard: "Standard",
     theme_dark: "Dunkel",

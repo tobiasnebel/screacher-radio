@@ -32,6 +32,8 @@ pub(super) static TEXTS: Texts = Texts {
     restart_language: "Language changes after restart.",
     minimize_to_tray: "Minimize to tray",
     always_on_top: "Always on top",
+    auto_play_last_station: "Auto-play last station on startup",
+    media_keys_failed: |error| format!("Media controls unavailable: {error}"),
     theme: "Theme",
     theme_standard: "Standard",
     theme_dark: "Dark",

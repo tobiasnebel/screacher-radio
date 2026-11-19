@@ -29,6 +29,7 @@ use url::Url;
 use crate::{
     i18n::{Language, Texts},
     icon,
+    media_keys::MediaKeys,
     metadata::TrackInfo,
     playback::{OutputDevice, Playback, PlaybackEvent, output_devices},
     settings::{self, Settings, Station, Theme},
@@ -59,6 +60,10 @@ pub enum Event {
     Stop,
     Volume(u8),
     ToggleMute,
+    #[cfg(target_os = "linux")]
+    TogglePlayback,
+    MediaPlay,
+    AutoPlayLastStation(bool),
     Timer,
     StartTimer(Option<u64>),
     ExtendTimer(u64),
@@ -126,17 +131,30 @@ pub fn run() {
         tray_position: None,
         next_device_check: Instant::now(),
         muted: false,
+        media_keys: None,
     };
     radio.refresh_stations();
     radio.refresh_playback_buttons();
     radio.show();
     let tray = Tray::new(messages, texts);
     radio.set_tray_available(tray.is_some());
+    match MediaKeys::new(messages) {
+        Ok(keys) => radio.media_keys = Some(keys),
+        Err(error) => radio
+            .view
+            .status(&(texts.media_keys_failed)(&error.to_string())),
+    }
+    radio.sync_media_keys();
     if let Some(error) = warning {
         dialog::alert_default(&(texts.settings_load_failed)(&error.to_string()));
     }
     if let Some(error) = station_warning {
         dialog::alert_default(&(texts.stations_load_failed)(&error.to_string()));
+    }
+    if let Some(index) = radio.settings.autoplay_station_index(&radio.stations) {
+        radio.selected = Some(index);
+        radio.play();
+        radio.sync_media_keys();
     }
 
     'event_loop: loop {
@@ -180,6 +198,7 @@ struct Radio {
     tray_position: Option<(i32, i32, i32)>,
     next_device_check: Instant,
     muted: bool,
+    media_keys: Option<MediaKeys>,
 }
 
 impl Radio {
@@ -244,8 +263,26 @@ impl Radio {
                 }
             }
             Event::Play => self.play(),
+            Event::MediaPlay => {
+                if self.playing.is_none() {
+                    self.play();
+                }
+            }
+            #[cfg(target_os = "linux")]
+            Event::TogglePlayback => {
+                if self.playing.is_some() {
+                    self.stop(self.view.texts.playback_stopped);
+                } else {
+                    self.play();
+                }
+            }
+            Event::AutoPlayLastStation(enabled) => {
+                self.settings.auto_play_last_station = enabled;
+                self.save();
+            }
             Event::Stop => self.stop(self.view.texts.playback_stopped),
             Event::Volume(volume) => {
+                self.view.volume.set_value(f64::from(volume));
                 self.settings.volume = volume;
                 if let Some(playing) = &self.playing {
                     playing
@@ -331,6 +368,17 @@ impl Radio {
             }
             Event::Playback(id, state) if id == self.playback_id => self.playback_event(state),
             Event::Playback(..) => {}
+        }
+        self.sync_media_keys();
+    }
+
+    fn sync_media_keys(&mut self) {
+        if let Some(keys) = &mut self.media_keys
+            && let Err(error) = keys.update(self.playing.is_some(), self.settings.volume)
+        {
+            self.view
+                .status(&(self.view.texts.media_keys_failed)(&error.to_string()));
+            self.media_keys = None;
         }
     }
 
@@ -611,6 +659,7 @@ impl Radio {
         self.view.clear_playback();
         self.view.status(status);
         self.refresh_playback_buttons();
+        self.sync_media_keys();
     }
 
     fn playback_event(&mut self, event: PlaybackEvent) {
@@ -996,7 +1045,7 @@ impl View {
         timer_window.set_callback(|window| window.hide());
 
         let mut settings_window = Window::default()
-            .with_size(465, 288)
+            .with_size(465, 330)
             .with_label(texts.settings);
         let mut minimize = CheckButton::new(12, 12, 345, 28, texts.minimize_to_tray);
         minimize.set_value(settings.minimize_to_tray);
@@ -1043,7 +1092,11 @@ impl View {
         audio_device.set_value(0);
         audio_device
             .set_callback(move |choice| messages.send(Event::SelectAudioDevice(choice.value())));
-        let mut close = Button::new(350, 249, 101, 28, texts.close);
+        let mut autoplay = CheckButton::new(12, 244, 439, 28, texts.auto_play_last_station);
+        autoplay.set_value(settings.auto_play_last_station);
+        autoplay
+            .set_callback(move |button| messages.send(Event::AutoPlayLastStation(button.value())));
+        let mut close = Button::new(350, 288, 101, 28, texts.close);
         let mut settings_dialog = settings_window.clone();
         close.set_callback(move |_| settings_dialog.hide());
         settings_window.end();

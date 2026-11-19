@@ -99,6 +99,8 @@ pub struct Texts {
     pub restart_language: &'static str,
     pub minimize_to_tray: &'static str,
     pub always_on_top: &'static str,
+    pub auto_play_last_station: &'static str,
+    pub media_keys_failed: fn(&str) -> String,
     pub theme: &'static str,
     pub theme_standard: &'static str,
     pub theme_dark: &'static str,
