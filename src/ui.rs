@@ -1307,7 +1307,7 @@ fn menu_label(path: &str, parent_symbol: &str, item_symbol: &str) -> String {
 
 fn round_window(window: &mut Window) {
     let (width, height) = (window.w() as usize, window.h() as usize);
-    let radius = 5.min(width / 2).min(height / 2);
+    let radius = 15.min(width / 2).min(height / 2);
     let mut mask = vec![255u8; width * height];
     for y in 0..radius {
         for x in 0..radius {
