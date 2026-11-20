@@ -38,6 +38,12 @@ pub enum MediaKeyAction {
     ToggleWindow,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct WindowPosition {
+    pub x: i32,
+    pub y: i32,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct Settings {
@@ -52,6 +58,7 @@ pub struct Settings {
     pub audio_device: Option<String>,
     pub auto_play_last_station: bool,
     pub media_key_action: MediaKeyAction,
+    pub window_position: Option<WindowPosition>,
 }
 
 impl Default for Settings {
@@ -67,6 +74,7 @@ impl Default for Settings {
             audio_device: None,
             auto_play_last_station: false,
             media_key_action: MediaKeyAction::Playback,
+            window_position: None,
         }
     }
 }
@@ -192,6 +200,7 @@ mod tests {
         assert_eq!(settings.audio_device, None);
         assert!(!settings.auto_play_last_station);
         assert_eq!(settings.media_key_action, MediaKeyAction::Playback);
+        assert_eq!(settings.window_position, None);
         assert!(!settings.always_on_top);
 
         settings.theme = Theme::Dark;
@@ -199,6 +208,7 @@ mod tests {
         settings.audio_device = Some("wasapi:test-device".into());
         settings.auto_play_last_station = true;
         settings.media_key_action = MediaKeyAction::ToggleWindow;
+        settings.window_position = Some(WindowPosition { x: -1200, y: 140 });
         settings.always_on_top = true;
         let json = serde_json::to_string(&settings).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();
@@ -207,6 +217,7 @@ mod tests {
         assert_eq!(restored.audio_device.as_deref(), Some("wasapi:test-device"));
         assert!(restored.auto_play_last_station);
         assert_eq!(restored.media_key_action, MediaKeyAction::ToggleWindow);
+        assert_eq!(restored.window_position, settings.window_position);
         assert!(restored.always_on_top);
         settings.theme = Theme::Light;
         let restored: Settings =
