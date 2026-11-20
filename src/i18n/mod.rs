@@ -97,6 +97,7 @@ pub struct Texts {
     pub cancel_timer: &'static str,
     pub start: &'static str,
     pub restart_language: &'static str,
+    pub ignore: &'static str,
     pub minimize_to_tray: &'static str,
     pub always_on_top: &'static str,
     pub auto_play_last_station: &'static str,
