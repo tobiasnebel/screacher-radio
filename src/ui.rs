@@ -340,8 +340,16 @@ impl Radio {
                 self.save();
             }
             Event::LanguageChanged(language) => {
-                self.settings.language = language;
-                self.save();
+                if self.settings.language != language {
+                    self.settings.language = language;
+                    self.save();
+                    let texts = self.view.texts;
+                    if dialog::choice2_default(texts.restart_language, texts.quit, texts.ignore, "")
+                        == Some(0)
+                    {
+                        self.messages.send(Event::Quit);
+                    }
+                }
             }
             Event::SelectAudioDevice(0) => self.set_audio_device(None),
             Event::SelectAudioDevice(index) => {
@@ -775,6 +783,19 @@ impl Radio {
     }
 }
 
+fn scroll_volume(slider: &mut ValueSlider) -> bool {
+    let delta = app::event_dy_value();
+    if delta == 0 {
+        return false;
+    }
+    let value = (slider.value().round() - 5.0 * f64::from(delta)).clamp(0.0, 100.0);
+    if slider.value() != value {
+        slider.set_value(value);
+        slider.do_callback();
+    }
+    true
+}
+
 fn show_window(window: &mut Window, on_top: bool) {
     window.show();
     if on_top {
@@ -942,16 +963,7 @@ impl View {
             if event != FltkEvent::MouseWheel || !app::event_inside_widget(slider) {
                 return false;
             }
-            let delta = app::event_dy_value();
-            if delta == 0 {
-                return false;
-            }
-            let value = (slider.value().round() - 5.0 * f64::from(delta)).clamp(0.0, 100.0);
-            if slider.value() != value {
-                slider.set_value(value);
-                slider.do_callback();
-            }
-            true
+            scroll_volume(slider)
         });
         let mut timer_button = Button::new(468, 344, 120, 28, TIMER_ICON);
         timer_button.set_tooltip(texts.open_timer);
@@ -972,11 +984,15 @@ impl View {
         let drag_panel = stream_info.panel.clone();
         let drag_status = status.clone();
         let drag_meter = meter.frame.clone();
+        let mut meter_volume = volume.clone();
         let mut drag_offset = None;
         // Catch drag areas before child widgets such as the menu bar consume the mouse event.
         window.super_handle_first(false);
         window.handle(move |window, event| {
             match event {
+                FltkEvent::MouseWheel if app::event_inside_widget(&drag_meter) => {
+                    return scroll_volume(&mut meter_volume);
+                }
                 FltkEvent::Push
                     if app::event_mouse_button() == app::MouseButton::Left
                         && (app::event_inside_widget(&drag_panel)
@@ -1066,17 +1082,9 @@ impl View {
         timer_window.set_callback(|window| window.hide());
 
         let mut settings_window = Window::default()
-            .with_size(465, 370)
+            .with_size(465, 360)
             .with_label(texts.settings);
-        let mut minimize = CheckButton::new(12, 12, 345, 28, texts.minimize_to_tray);
-        minimize.set_value(settings.minimize_to_tray);
-        minimize.set_callback(move |button| messages.send(Event::MinimizeToTray(button.value())));
-        let mut tray_note = Frame::new(14, 44, 342, 20, None);
-        tray_note.set_align(Align::Inside | Align::Left);
-        let mut on_top = CheckButton::new(12, 67, 344, 26, texts.always_on_top);
-        on_top.set_value(settings.always_on_top);
-        on_top.set_callback(move |button| messages.send(Event::AlwaysOnTop(button.value())));
-        let mut theme = Choice::new(90, 104, 154, 28, texts.theme);
+        let mut theme = Choice::new(154, 12, 297, 28, texts.theme);
         theme.add_choice(&format!(
             "{}|{}|{}",
             texts.theme_standard, texts.theme_dark, texts.theme_light
@@ -1094,7 +1102,7 @@ impl View {
             };
             messages.send(Event::ThemeChanged(theme));
         });
-        let mut language = Choice::new(90, 143, 154, 28, texts.language);
+        let mut language = Choice::new(154, 51, 297, 28, texts.language);
         for (index, option) in Language::OPTIONS.into_iter().enumerate() {
             language.add_choice(option.label(texts));
             if option == settings.language {
@@ -1106,18 +1114,12 @@ impl View {
                 messages.send(Event::LanguageChanged(language));
             }
         });
-        let mut restart = Frame::new(14, 175, 342, 20, texts.restart_language);
-        restart.set_align(Align::Inside | Align::Left);
-        let mut audio_device = Choice::new(154, 205, 297, 28, texts.audio_device);
+        let mut audio_device = Choice::new(154, 90, 297, 28, texts.audio_device);
         audio_device.add_choice(texts.default_audio_device);
         audio_device.set_value(0);
         audio_device
             .set_callback(move |choice| messages.send(Event::SelectAudioDevice(choice.value())));
-        let mut autoplay = CheckButton::new(12, 244, 439, 28, texts.auto_play_last_station);
-        autoplay.set_value(settings.auto_play_last_station);
-        autoplay
-            .set_callback(move |button| messages.send(Event::AutoPlayLastStation(button.value())));
-        let mut media_action = Choice::new(154, 283, 297, 28, texts.media_key_action);
+        let mut media_action = Choice::new(154, 129, 297, 28, texts.media_key_action);
         for label in [texts.media_key_playback, texts.media_key_window] {
             media_action.add_choice(label);
         }
@@ -1132,7 +1134,19 @@ impl View {
             };
             messages.send(Event::MediaKeyActionChanged(action));
         });
-        let mut close = Button::new(350, 328, 101, 28, texts.close);
+        let mut minimize = CheckButton::new(12, 176, 439, 28, texts.minimize_to_tray);
+        minimize.set_value(settings.minimize_to_tray);
+        minimize.set_callback(move |button| messages.send(Event::MinimizeToTray(button.value())));
+        let mut on_top = CheckButton::new(12, 210, 439, 28, texts.always_on_top);
+        on_top.set_value(settings.always_on_top);
+        on_top.set_callback(move |button| messages.send(Event::AlwaysOnTop(button.value())));
+        let mut autoplay = CheckButton::new(12, 244, 439, 28, texts.auto_play_last_station);
+        autoplay.set_value(settings.auto_play_last_station);
+        autoplay
+            .set_callback(move |button| messages.send(Event::AutoPlayLastStation(button.value())));
+        let mut tray_note = Frame::new(14, 280, 437, 20, None);
+        tray_note.set_align(Align::Inside | Align::Left);
+        let mut close = Button::new(350, 318, 101, 28, texts.close);
         let mut settings_dialog = settings_window.clone();
         close.set_callback(move |_| settings_dialog.hide());
         settings_window.end();
@@ -1140,7 +1154,7 @@ impl View {
         settings_window.set_callback(|window| window.hide());
 
         let mut about_window = Window::default()
-            .with_size(360, 188)
+            .with_size(360, 224)
             .with_label(texts.about);
         about_window.set_icon(Some(icon::window()));
         let logo_size = icon::ABOUT_SIZE;
@@ -1149,7 +1163,17 @@ impl View {
         let version = (texts.version)(env!("SCREACHER_VERSION"));
         let mut info = Frame::new(12, 84, 336, 52, version.as_str());
         info.set_align(Align::Inside | Align::Wrap);
-        let mut close = Button::new(130, 146, 100, 28, texts.close);
+        let mut github = Button::new(12, 140, 336, 28, "GitHub: tobiasnebel/screacher-radio");
+        github.set_frame(FrameType::FlatBox);
+        github.set_tooltip("https://github.com/tobiasnebel/screacher-radio");
+        github.set_callback(|_| {
+            if let Err(error) =
+                fltk::utils::open_uri("https://github.com/tobiasnebel/screacher-radio")
+            {
+                dialog::alert_default(&error.to_string());
+            }
+        });
+        let mut close = Button::new(130, 182, 100, 28, texts.close);
         let mut about_dialog = about_window.clone();
         close.set_callback(move |_| about_dialog.hide());
         about_window.end();
