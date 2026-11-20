@@ -32,7 +32,7 @@ use crate::{
     media_keys::{MediaKey, MediaKeys},
     metadata::TrackInfo,
     playback::{OutputDevice, Playback, PlaybackEvent, output_devices},
-    settings::{self, MediaKeyAction, Settings, Station, Theme},
+    settings::{self, MediaKeyAction, Settings, Station, Theme, WindowPosition},
     single_instance::Instance,
     station::station_url,
     theme::Palette,
@@ -47,6 +47,7 @@ pub enum Event {
     Activate,
     Minimized,
     MinimizeWindow,
+    WindowPositionChanged,
     Escape,
     #[cfg(target_os = "linux")]
     TrayAvailable(bool),
@@ -167,9 +168,7 @@ pub fn run() {
         let _ = app::wait_for(wait);
     }
     radio.playing = None;
-    if radio.save_at.is_some() {
-        radio.save();
-    }
+    radio.save();
 }
 
 struct Playing {
@@ -214,6 +213,7 @@ impl Radio {
                 }
             }
             Event::MinimizeWindow => self.minimize(),
+            Event::WindowPositionChanged => self.remember_window_position(),
             Event::Minimized => {
                 if self.view.window.shown() && !self.view.window.visible() {
                     self.hide_to_tray();
@@ -400,6 +400,7 @@ impl Radio {
     }
 
     fn minimize(&mut self) {
+        self.remember_window_position();
         if self.settings.minimize_to_tray && self.tray_available {
             self.hide_to_tray();
         } else {
@@ -448,6 +449,7 @@ impl Radio {
 
     fn hide_to_tray(&mut self) {
         if self.settings.minimize_to_tray && self.tray_available && self.view.window.shown() {
+            self.remember_window_position();
             let window = &self.view.window;
             self.tray_position = Some((window.x(), window.y(), window.screen_num()));
             self.view.timer_window.hide();
@@ -773,6 +775,7 @@ impl Radio {
     }
 
     fn save(&mut self) {
+        self.remember_window_position();
         self.save_at = None;
         if let Some(path) = &self.path
             && let Err(error) = self.settings.save(path)
@@ -780,6 +783,37 @@ impl Radio {
             self.view
                 .status(&(self.view.texts.settings_save_failed)(&error.to_string()));
         }
+    }
+
+    fn remember_window_position(&mut self) {
+        // Windows uses special coordinates for minimized windows; retain the normal position.
+        if self.view.window.visible() {
+            let position = WindowPosition {
+                x: self.view.window.x(),
+                y: self.view.window.y(),
+            };
+            if self.settings.window_position != Some(position) {
+                self.settings.window_position = Some(position);
+                self.save_at = Some(Instant::now() + Duration::from_millis(350));
+            }
+        }
+    }
+}
+
+fn fit_window_position(
+    position: WindowPosition,
+    (x, y, width, height): (i32, i32, i32, i32),
+    (window_width, window_height): (i32, i32),
+) -> WindowPosition {
+    WindowPosition {
+        x: position.x.clamp(
+            x,
+            x.saturating_add(width.saturating_sub(window_width).max(0)),
+        ),
+        y: position.y.clamp(
+            y,
+            y.saturating_add(height.saturating_sub(window_height).max(0)),
+        ),
     }
 }
 
@@ -888,6 +922,17 @@ impl View {
             .with_size(600, 452)
             .center_screen()
             .with_label("Screacher Radio");
+        if let Some(position) = settings.window_position {
+            let screen = app::screen_num(position.x, position.y);
+            let position = fit_window_position(
+                position,
+                app::screen_work_area(screen),
+                (window.w(), window.h()),
+            );
+            window.set_screen_num(screen);
+            window.set_pos(position.x, position.y);
+            window.force_position(true);
+        }
         window.set_border(false);
         let mut menu = MenuBar::new(12, 12, 490, 28, None);
         for (label, symbol, event) in [
@@ -1032,7 +1077,12 @@ impl View {
                         return true;
                     }
                 }
-                FltkEvent::Released => return drag_offset.take().is_some(),
+                FltkEvent::Released => {
+                    if drag_offset.take().is_some() {
+                        messages.send(Event::WindowPositionChanged);
+                        return true;
+                    }
+                }
                 FltkEvent::Hide => {
                     drag_offset = None;
                     messages.send(Event::Minimized);
@@ -1049,6 +1099,7 @@ impl View {
         round_window(&mut window);
         let mut shape_size = (window.w(), window.h());
         window.resize_callback(move |window, _, _, w, h| {
+            messages.send(Event::WindowPositionChanged);
             if (w, h) != shape_size && w > 0 && h > 0 {
                 shape_size = (w, h);
                 round_window(window);
@@ -1686,12 +1737,78 @@ impl StereoMeter {
 mod tests {
     use super::*;
 
+    #[test]
+    fn window_position_stays_on_an_available_screen() {
+        let size = (600, 452);
+        let negative = WindowPosition { x: -1700, y: 50 };
+        assert_eq!(
+            fit_window_position(negative, (-1920, 0, 1920, 1080), size),
+            negative
+        );
+        assert_eq!(
+            fit_window_position(negative, (0, 0, 1920, 1040), size),
+            WindowPosition { x: 0, y: 50 }
+        );
+        assert_eq!(
+            fit_window_position(
+                WindowPosition { x: 1900, y: 1000 },
+                (0, 0, 1920, 1040),
+                size
+            ),
+            WindowPosition { x: 1320, y: 588 }
+        );
+        assert_eq!(
+            fit_window_position(
+                WindowPosition {
+                    x: i32::MIN,
+                    y: i32::MAX
+                },
+                (0, 0, 320, 240),
+                size
+            ),
+            WindowPosition { x: 0, y: 0 }
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires an interactive Windows desktop"]
+    fn saved_window_position_is_restored_on_startup() {
+        let _app = app::App::default();
+        let (x, y, _, _) = app::screen_work_area(0);
+        let expected = (x + 37, y + 43);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"window_position":{{"x":{},"y":{}}}}}"#,
+                expected.0, expected.1
+            ),
+        )
+        .unwrap();
+        let settings = Settings::load(&path).unwrap();
+        let (messages, _events) = app::channel();
+        let mut view = View::new(messages, &settings, Language::English.texts());
+        view.window.show();
+        let actual = (view.window.x(), view.window.y());
+        view.window.hide();
+        assert_eq!(actual, expected);
+        settings.save(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(saved["window_position"]["x"], expected.0);
+        assert_eq!(saved["window_position"]["y"], expected.1);
+    }
+
     #[cfg(windows)]
     #[test]
     #[ignore = "requires an interactive Windows desktop"]
     fn media_keys_toggle_the_window_without_starting_playback() {
         let _app = app::App::default();
         let (messages, _events) = app::channel();
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
         let settings = Settings {
             media_key_action: MediaKeyAction::ToggleWindow,
             ..Settings::default()
@@ -1699,7 +1816,7 @@ mod tests {
         let mut radio = Radio {
             view: View::new(messages, &settings, Language::English.texts()),
             messages,
-            path: None,
+            path: Some(settings_path.clone()),
             settings,
             stations_path: None,
             stations: Vec::new(),
@@ -1726,9 +1843,16 @@ mod tests {
             }
         };
         radio.show();
+        radio.handle(Event::WindowPositionChanged);
+        let expected_position = radio.settings.window_position;
         radio.handle(Event::MediaKey(MediaKey::Play));
         wait_until(&|| !radio.view.window.visible());
         assert!(radio.view.window.shown()); // Minimized to the taskbar.
+        radio.save();
+        assert_eq!(
+            Settings::load(&settings_path).unwrap().window_position,
+            expected_position
+        );
         radio.handle(Event::MediaKey(MediaKey::Play));
         wait_until(&|| radio.view.window.visible());
 
@@ -1736,6 +1860,11 @@ mod tests {
         let position = (radio.view.window.x(), radio.view.window.y());
         radio.handle(Event::MediaKey(MediaKey::Pause));
         assert!(!radio.view.window.shown());
+        radio.save();
+        assert_eq!(
+            Settings::load(&settings_path).unwrap().window_position,
+            expected_position
+        );
         radio.handle(Event::MediaKey(MediaKey::Pause));
         wait_until(&|| radio.view.window.visible());
         assert_eq!((radio.view.window.x(), radio.view.window.y()), position);
