@@ -974,6 +974,20 @@ impl View {
         window.end();
         window.resizable(&station_area);
         window.size_range(600, 452, 0, 0);
+        // Draw over the normal window contents, using the theme's current text color.
+        window.super_draw_first(true);
+        window.draw(|window| {
+            draw::set_draw_color(Color::Foreground);
+            draw::set_line_style(draw::LineStyle::Solid, 1);
+            draw::draw_rounded_rect(
+                1,
+                1,
+                window.w() - 2,
+                window.h() - 2,
+                WINDOW_CORNER_RADIUS - 1,
+            );
+            draw::set_line_style(draw::LineStyle::Solid, 0);
+        });
         window.set_callback(move |_| {
             messages.send(match app::callback_reason() {
                 CallbackReason::Cancelled => Event::Escape,
@@ -1333,9 +1347,13 @@ fn menu_label(path: &str, parent_symbol: &str, item_symbol: &str) -> String {
     format!("@{parent_symbol}  {parent}  /@{item_symbol}  {item}  ")
 }
 
+const WINDOW_CORNER_RADIUS: i32 = 15;
+
 fn round_window(window: &mut Window) {
     let (width, height) = (window.w() as usize, window.h() as usize);
-    let radius = 15.min(width / 2).min(height / 2);
+    let radius = (WINDOW_CORNER_RADIUS as usize)
+        .min(width / 2)
+        .min(height / 2);
     let mut mask = vec![255u8; width * height];
     for y in 0..radius {
         for x in 0..radius {
