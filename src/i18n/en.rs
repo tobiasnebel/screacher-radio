@@ -33,6 +33,8 @@ pub(super) static TEXTS: Texts = Texts {
     ignore: "Ignore",
     minimize_to_tray: "Minimize to tray",
     always_on_top: "Always on top",
+    transparency: "Transparency (%)",
+    transparency_hint: "Main window only: 0% is opaque, up to 90% transparent.",
     auto_play_last_station: "Auto-play last station on startup",
     media_key_action: "Play media key",
     media_key_playback: "Start or stop playback",

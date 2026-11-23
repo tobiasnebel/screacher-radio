@@ -100,6 +100,8 @@ pub struct Texts {
     pub ignore: &'static str,
     pub minimize_to_tray: &'static str,
     pub always_on_top: &'static str,
+    pub transparency: &'static str,
+    pub transparency_hint: &'static str,
     pub auto_play_last_station: &'static str,
     pub media_key_action: &'static str,
     pub media_key_playback: &'static str,

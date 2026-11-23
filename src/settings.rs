@@ -59,6 +59,7 @@ pub struct Settings {
     pub auto_play_last_station: bool,
     pub media_key_action: MediaKeyAction,
     pub window_position: Option<WindowPosition>,
+    pub transparency: u8,
 }
 
 impl Default for Settings {
@@ -75,6 +76,7 @@ impl Default for Settings {
             auto_play_last_station: false,
             media_key_action: MediaKeyAction::Playback,
             window_position: None,
+            transparency: 0,
         }
     }
 }
@@ -103,6 +105,7 @@ impl Settings {
         };
         let mut settings: Self = serde_json::from_reader(BufReader::new(file))?;
         settings.volume = settings.volume.min(100);
+        settings.transparency = settings.transparency.min(90);
         Ok(settings)
     }
 
@@ -201,6 +204,7 @@ mod tests {
         assert!(!settings.auto_play_last_station);
         assert_eq!(settings.media_key_action, MediaKeyAction::Playback);
         assert_eq!(settings.window_position, None);
+        assert_eq!(settings.transparency, 0);
         assert!(!settings.always_on_top);
 
         settings.theme = Theme::Dark;
@@ -209,6 +213,7 @@ mod tests {
         settings.auto_play_last_station = true;
         settings.media_key_action = MediaKeyAction::ToggleWindow;
         settings.window_position = Some(WindowPosition { x: -1200, y: 140 });
+        settings.transparency = 35;
         settings.always_on_top = true;
         let json = serde_json::to_string(&settings).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();
@@ -218,6 +223,7 @@ mod tests {
         assert!(restored.auto_play_last_station);
         assert_eq!(restored.media_key_action, MediaKeyAction::ToggleWindow);
         assert_eq!(restored.window_position, settings.window_position);
+        assert_eq!(restored.transparency, 35);
         assert!(restored.always_on_top);
         settings.theme = Theme::Light;
         let restored: Settings =

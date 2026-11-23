@@ -33,6 +33,8 @@ pub(super) static TEXTS: Texts = Texts {
     ignore: "Ignorieren",
     minimize_to_tray: "Beim Minimieren in den Tray verschieben",
     always_on_top: "Immer im Vordergrund",
+    transparency: "Transparenz (%)",
+    transparency_hint: "Nur das Hauptfenster: 0% ist deckend, bis zu 90% transparent.",
     auto_play_last_station: "Letzten Sender beim Programmstart abspielen",
     media_key_action: "Play-Medientaste",
     media_key_playback: "Wiedergabe starten oder stoppen",
