@@ -71,6 +71,7 @@ pub enum Event {
     About,
     MinimizeToTray(bool),
     AlwaysOnTop(bool),
+    TransparencyChanged(u8),
     ThemeChanged(Theme),
     LanguageChanged(Language),
     SelectAudioDevice(i32),
@@ -334,6 +335,11 @@ impl Radio {
                 self.view.set_on_top(value);
                 self.save();
             }
+            Event::TransparencyChanged(value) => {
+                self.settings.transparency = value.min(90);
+                self.apply_transparency();
+                self.save_at = Some(Instant::now() + Duration::from_millis(350));
+            }
             Event::ThemeChanged(theme) => {
                 self.settings.theme = theme;
                 self.view.apply_theme(theme);
@@ -444,6 +450,15 @@ impl Radio {
         }
         show_window(&mut self.view.window, self.settings.always_on_top);
         window_order::show_in_taskbar(&self.view.window);
+        self.apply_transparency();
+    }
+
+    fn apply_transparency(&mut self) {
+        if self.view.window.visible() {
+            self.view
+                .window
+                .set_opacity(1.0 - f64::from(self.settings.transparency.min(90)) / 100.0);
+        }
     }
 
     fn hide_to_tray(&mut self) {
@@ -1096,7 +1111,7 @@ impl View {
         timer_window.set_callback(|window| window.hide());
 
         let mut settings_window = Window::default()
-            .with_size(465, 360)
+            .with_size(465, 399)
             .with_label(texts.settings);
         let mut theme = Choice::new(154, 12, 297, 28, texts.theme);
         theme.add_choice(&format!(
@@ -1148,19 +1163,31 @@ impl View {
             };
             messages.send(Event::MediaKeyActionChanged(action));
         });
-        let mut minimize = CheckButton::new(12, 176, 439, 28, texts.minimize_to_tray);
+        let mut transparency = ValueSlider::new(154, 168, 297, 28, texts.transparency);
+        transparency.set_align(Align::Left);
+        transparency.set_type(SliderType::Horizontal);
+        transparency.set_range(0.0, 90.0);
+        transparency.set_precision(0);
+        transparency.set_step(1.0, 1);
+        transparency.set_value(f64::from(settings.transparency));
+        transparency.set_color(Color::Background2);
+        transparency.set_tooltip(texts.transparency_hint);
+        transparency.set_callback(move |slider| {
+            messages.send(Event::TransparencyChanged(slider.value().round() as u8));
+        });
+        let mut minimize = CheckButton::new(12, 215, 439, 28, texts.minimize_to_tray);
         minimize.set_value(settings.minimize_to_tray);
         minimize.set_callback(move |button| messages.send(Event::MinimizeToTray(button.value())));
-        let mut on_top = CheckButton::new(12, 210, 439, 28, texts.always_on_top);
+        let mut on_top = CheckButton::new(12, 249, 439, 28, texts.always_on_top);
         on_top.set_value(settings.always_on_top);
         on_top.set_callback(move |button| messages.send(Event::AlwaysOnTop(button.value())));
-        let mut autoplay = CheckButton::new(12, 244, 439, 28, texts.auto_play_last_station);
+        let mut autoplay = CheckButton::new(12, 283, 439, 28, texts.auto_play_last_station);
         autoplay.set_value(settings.auto_play_last_station);
         autoplay
             .set_callback(move |button| messages.send(Event::AutoPlayLastStation(button.value())));
-        let mut tray_note = Frame::new(14, 280, 437, 20, None);
+        let mut tray_note = Frame::new(14, 319, 437, 20, None);
         tray_note.set_align(Align::Inside | Align::Left);
-        let mut close = Button::new(350, 318, 101, 28, texts.close);
+        let mut close = Button::new(350, 357, 101, 28, texts.close);
         let mut settings_dialog = settings_window.clone();
         close.set_callback(move |_| settings_dialog.hide());
         settings_window.end();
@@ -1694,6 +1721,7 @@ mod tests {
         let (messages, _events) = app::channel();
         let settings = Settings {
             media_key_action: MediaKeyAction::ToggleWindow,
+            transparency: 35,
             ..Settings::default()
         };
         let mut radio = Radio {
@@ -1726,6 +1754,32 @@ mod tests {
             }
         };
         radio.show();
+        let check_alpha = |window: &Window, expected| {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GetLayeredWindowAttributes, LWA_ALPHA,
+            };
+            let mut alpha = 0;
+            let mut flags = 0;
+            assert_ne!(
+                unsafe {
+                    GetLayeredWindowAttributes(
+                        window.raw_handle(),
+                        std::ptr::null_mut(),
+                        &mut alpha,
+                        &mut flags,
+                    )
+                },
+                0
+            );
+            assert_eq!(flags & LWA_ALPHA, LWA_ALPHA);
+            assert_eq!(alpha, expected);
+        };
+        check_alpha(&radio.view.window, 166);
+        radio.handle(Event::Settings);
+        assert_eq!(radio.view.settings_window.opacity(), 1.0);
+        radio.view.settings_window.hide();
+        radio.handle(Event::TransparencyChanged(50));
+        check_alpha(&radio.view.window, 128);
         radio.handle(Event::MediaKey(MediaKey::Play));
         wait_until(&|| !radio.view.window.visible());
         assert!(radio.view.window.shown()); // Minimized to the taskbar.
@@ -1739,6 +1793,7 @@ mod tests {
         radio.handle(Event::MediaKey(MediaKey::Pause));
         wait_until(&|| radio.view.window.visible());
         assert_eq!((radio.view.window.x(), radio.view.window.y()), position);
+        check_alpha(&radio.view.window, 128);
         assert!(radio.playing.is_none());
         assert_eq!(radio.playback_id, 0);
 
