@@ -220,7 +220,11 @@ impl Radio {
                     self.hide_to_tray();
                 }
             }
-            Event::Escape => self.hide_to_tray(),
+            Event::Escape => {
+                if !self.view.close_open_dialog() {
+                    self.hide_to_tray();
+                }
+            }
             #[cfg(target_os = "linux")]
             Event::TrayAvailable(available) => self.set_tray_available(available),
             Event::Search => self.refresh_stations(),
@@ -858,6 +862,11 @@ fn show_dialog(parent: &Window, dialog: &mut Window, on_top: bool) {
     let y = parent.y() + (parent.h() - dialog.h()) / 2;
     dialog.set_pos(x, y);
     show_window(dialog, on_top);
+    // Hiding a dialog destroys its native window; reapply the shape on every opening.
+    round_window(dialog);
+    dialog.redraw();
+    window_order::activate(dialog);
+    let _ = dialog.take_focus();
 }
 
 fn timer_deadline(from: Instant, minutes: u64) -> Option<Instant> {
@@ -1034,20 +1043,7 @@ impl View {
         window.end();
         window.resizable(&station_area);
         window.size_range(600, 452, 0, 0);
-        // Draw over the normal window contents, using the theme's current text color.
-        window.super_draw_first(true);
-        window.draw(|window| {
-            draw::set_draw_color(Color::Foreground);
-            draw::set_line_style(draw::LineStyle::Solid, 1);
-            draw::draw_rounded_rect(
-                1,
-                1,
-                window.w() - 2,
-                window.h() - 2,
-                WINDOW_CORNER_RADIUS - 1,
-            );
-            draw::set_line_style(draw::LineStyle::Solid, 0);
-        });
+        style_window_frame(&mut window);
         window.set_callback(move |_| {
             messages.send(match app::callback_reason() {
                 CallbackReason::Cancelled => Event::Escape,
@@ -1111,7 +1107,6 @@ impl View {
             false
         });
         window.set_icon(Some(icon::window()));
-        round_window(&mut window);
         let mut shape_size = (window.w(), window.h());
         window.resize_callback(move |window, _, _, w, h| {
             messages.send(Event::WindowPositionChanged);
@@ -1124,17 +1119,25 @@ impl View {
         let mut add_window = Window::default()
             .with_size(475, 143)
             .with_label(texts.add_station);
+        add_window.set_border(false);
+        style_window_frame(&mut add_window);
         let name = Input::new(68, 14, 393, 28, texts.name);
         let mut url = Input::new(68, 50, 393, 28, "URL");
         url.set_tooltip(texts.url_hint);
         let mut save = Button::new(341, 100, 120, 28, texts.add);
         save.emit(messages, Event::SaveStation);
+        let mut cancel = Button::new(213, 100, 120, 28, texts.cancel);
+        let mut add_dialog = add_window.clone();
+        cancel.set_callback(move |_| add_dialog.hide());
         add_window.end();
         add_window.make_modal(true);
+        add_window.set_callback(|window| window.hide());
 
         let mut timer_window = Window::default()
-            .with_size(342, 181)
+            .with_size(342, 220)
             .with_label(texts.sleep_timer);
+        timer_window.set_border(false);
+        style_window_frame(&mut timer_window);
         let mut preset_label = Frame::new(14, 10, 314, 20, texts.start_for);
         preset_label.set_align(Align::Inside | Align::Left);
         for (column, minutes) in [15, 30, 45, 60].into_iter().enumerate() {
@@ -1158,12 +1161,18 @@ impl View {
         clear.emit(messages, Event::CancelTimer);
         let mut start = Button::new(124, 139, 73, 28, texts.start);
         start.emit(messages, Event::StartTimer(None));
+        let mut close = Button::new(205, 178, 123, 28, texts.close);
+        let mut timer_dialog = timer_window.clone();
+        close.set_callback(move |_| timer_dialog.hide());
         timer_window.end();
+        timer_window.make_modal(false);
         timer_window.set_callback(|window| window.hide());
 
         let mut settings_window = Window::default()
             .with_size(465, 399)
             .with_label(texts.settings);
+        settings_window.set_border(false);
+        style_window_frame(&mut settings_window);
         let mut theme = Choice::new(154, 12, 297, 28, texts.theme);
         theme.add_choice(&format!(
             "{}|{}|{}",
@@ -1248,6 +1257,8 @@ impl View {
         let mut about_window = Window::default()
             .with_size(360, 224)
             .with_label(texts.about);
+        about_window.set_border(false);
+        style_window_frame(&mut about_window);
         about_window.set_icon(Some(icon::window()));
         let logo_size = icon::ABOUT_SIZE;
         Frame::new((360 - logo_size) / 2, 14, logo_size, logo_size, None)
@@ -1364,6 +1375,27 @@ impl View {
         }
     }
 
+    fn close_open_dialog(&mut self) -> bool {
+        let dialogs = [
+            &self.add_window,
+            &self.settings_window,
+            &self.timer_window,
+            &self.about_window,
+        ];
+        // FLTK orders shown windows by most recent activation. Prefer the frontmost dialog.
+        if let Some(mut window) = app::windows().into_iter().flatten().find(|window| {
+            window.visible()
+                && dialogs
+                    .iter()
+                    .any(|dialog| dialog.as_widget_ptr() == window.as_widget_ptr())
+        }) {
+            window.hide();
+            true
+        } else {
+            false
+        }
+    }
+
     fn apply_theme(&mut self, theme: Theme) {
         self.palette.apply(theme);
         self.volume.set_color(if theme != Theme::Standard {
@@ -1426,6 +1458,24 @@ fn menu_label(path: &str, parent_symbol: &str, item_symbol: &str) -> String {
 }
 
 const WINDOW_CORNER_RADIUS: i32 = 15;
+
+fn style_window_frame(window: &mut Window) {
+    // Paint over the normal contents, using the theme's current text/accent color.
+    window.super_draw_first(true);
+    window.draw(|window| {
+        draw::set_draw_color(Color::Foreground);
+        draw::set_line_style(draw::LineStyle::Solid, 1);
+        draw::draw_rounded_rect(
+            1,
+            1,
+            window.w() - 2,
+            window.h() - 2,
+            WINDOW_CORNER_RADIUS - 1,
+        );
+        draw::set_line_style(draw::LineStyle::Solid, 0);
+    });
+    round_window(window);
+}
 
 fn round_window(window: &mut Window) {
     let (width, height) = (window.w() as usize, window.h() as usize);
@@ -1833,7 +1883,7 @@ mod tests {
     #[ignore = "requires an interactive Windows desktop"]
     fn media_keys_toggle_the_window_without_starting_playback() {
         let _app = app::App::default();
-        let (messages, _events) = app::channel();
+        let (messages, events) = app::channel();
         let dir = tempfile::tempdir().unwrap();
         let settings_path = dir.path().join("settings.json");
         let settings = Settings {
@@ -1895,6 +1945,59 @@ mod tests {
         radio.handle(Event::Settings);
         assert_eq!(radio.view.settings_window.opacity(), 1.0);
         radio.view.settings_window.hide();
+        radio.settings.minimize_to_tray = true;
+        for event in [Event::Settings, Event::Timer] {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_KEYDOWN, WM_KEYUP};
+            let mut dialog = match event {
+                Event::Settings => radio.view.settings_window.clone(),
+                _ => radio.view.timer_window.clone(),
+            };
+            radio.handle(event);
+            // Borderless nonmodal dialogs can leave keyboard focus on the main window.
+            let target = radio.view.window.raw_handle();
+            unsafe {
+                SendMessageW(target, WM_KEYDOWN, 0x1b, 1);
+                SendMessageW(target, WM_KEYUP, 0x1b, 0xc0010001);
+            }
+            while let Some(event) = events.recv() {
+                radio.handle(event);
+            }
+            let main_visible = radio.view.window.visible();
+            let dialog_visible = dialog.visible();
+            dialog.hide();
+            assert!(
+                main_visible,
+                "Escape in a dialog must keep the main window visible"
+            );
+            assert!(!dialog_visible, "Escape must close the dialog");
+        }
+        radio.settings.minimize_to_tray = false;
+        let timer_deadline = Instant::now() + Duration::from_secs(900);
+        radio.timer = Some(timer_deadline);
+        for (mut dialog, close_label) in [
+            (radio.view.add_window.clone(), radio.view.texts.cancel),
+            (radio.view.settings_window.clone(), radio.view.texts.close),
+            (radio.view.about_window.clone(), radio.view.texts.close),
+            (radio.view.timer_window.clone(), radio.view.texts.close),
+        ] {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, WS_CAPTION, WS_EX_APPWINDOW,
+                WS_EX_TOOLWINDOW,
+            };
+            show_dialog(&radio.view.window, &mut dialog, false);
+            let style = unsafe { GetWindowLongPtrW(dialog.raw_handle(), GWL_STYLE) } as u32;
+            let extended = unsafe { GetWindowLongPtrW(dialog.raw_handle(), GWL_EXSTYLE) } as u32;
+            assert_eq!(style & WS_CAPTION, 0);
+            assert_eq!(extended & WS_EX_APPWINDOW, 0);
+            assert_ne!(extended & WS_EX_TOOLWINDOW, 0);
+            let mut close = (0..dialog.children())
+                .filter_map(|index| dialog.child(index))
+                .find(|child| child.label() == close_label)
+                .expect("dialog must have a close or cancel button");
+            close.do_callback();
+            assert!(!dialog.shown());
+        }
+        assert_eq!(radio.timer, Some(timer_deadline));
         radio.handle(Event::TransparencyChanged(50));
         check_alpha(&radio.view.window, 128);
         radio.handle(Event::MediaKey(MediaKey::Play));
