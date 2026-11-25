@@ -16,6 +16,51 @@ use crate::{
 pub type BoxError = Box<dyn Error + Send + Sync>;
 const PLAYLIST_LIMIT: usize = 256 * 1024;
 
+#[derive(Clone, Debug)]
+pub struct StationInfo {
+    pub streams: Vec<Url>,
+    pub content: String,
+}
+
+pub fn inspect(url: &Url, texts: &Texts) -> Result<StationInfo, BoxError> {
+    let agent: Agent = Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(15)))
+        .timeout_connect(Some(Duration::from_secs(8)))
+        .timeout_per_read(Some(Duration::from_secs(8)))
+        .max_redirects(5)
+        .user_agent("ScreacherRadio/0.1")
+        .build()
+        .into();
+    let response = agent.get(url.as_str()).call()?;
+    let base = station_url(&response.get_uri().to_string(), texts)?;
+    let mime = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let declared = playlist_format(&base, mime).or_else(|| playlist_format(url, ""));
+    let mut body = BufReader::new(response.into_body().into_reader());
+    let format = match declared {
+        Some(format) => Some(format),
+        None => sniff_playlist(body.fill_buf()?),
+    };
+    let Some(format) = format else {
+        return Ok(StationInfo {
+            streams: vec![url.clone()],
+            content: url.to_string(),
+        });
+    };
+    let mut data = Vec::new();
+    body.take((PLAYLIST_LIMIT + 1) as u64)
+        .read_to_end(&mut data)?;
+    if data.len() > PLAYLIST_LIMIT {
+        return Err(texts.playlist_too_large.into());
+    }
+    let content = String::from_utf8_lossy(&data).into_owned();
+    let streams = playlist_streams(&base, format, &content, texts)?;
+    Ok(StationInfo { streams, content })
+}
+
 #[derive(Clone, Copy)]
 enum Playlist {
     M3u,
@@ -147,32 +192,149 @@ fn sniff_playlist(data: &[u8]) -> Option<Playlist> {
 }
 
 fn first_stream(base: &Url, format: Playlist, text: &str, texts: &Texts) -> Result<Url, BoxError> {
-    let mut lines = text.trim_start_matches('\u{feff}').lines().map(str::trim);
-    let entry = match format {
+    let entries = playlist_entries(format, text, texts)?;
+    validate_url(base.join(entries[0])?, texts)
+}
+
+fn playlist_entries<'a>(
+    format: Playlist,
+    text: &'a str,
+    texts: &Texts,
+) -> Result<Vec<&'a str>, BoxError> {
+    let lines = text.trim_start_matches('\u{feff}').lines().map(str::trim);
+    let entries: Vec<_> = match format {
         Playlist::M3u => {
             if lines.clone().any(|line| line.starts_with("#EXT-X-")) {
                 return Err(texts.hls_unsupported.into());
             }
-            lines.find(|line| !line.is_empty() && !line.starts_with('#'))
+            lines
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .collect()
         }
-        Playlist::Pls => lines
-            .filter_map(|line| {
-                let (key, value) = line.split_once('=')?;
-                let key = key.trim().to_ascii_lowercase();
-                let index = key.strip_prefix("file")?.parse::<u32>().ok()?;
-                (index > 0 && !value.trim().is_empty()).then_some((index, value.trim()))
-            })
-            .min_by_key(|&(index, _)| index)
-            .map(|(_, value)| value),
+        Playlist::Pls => {
+            let mut entries: Vec<_> = lines
+                .filter_map(|line| {
+                    let (key, value) = line.split_once('=')?;
+                    let key = key.trim().to_ascii_lowercase();
+                    let index = key.strip_prefix("file")?.parse::<u32>().ok()?;
+                    (index > 0 && !value.trim().is_empty()).then_some((index, value.trim()))
+                })
+                .collect();
+            entries.sort_by_key(|&(index, _)| index);
+            entries.dedup_by_key(|entry| entry.0);
+            entries.into_iter().map(|(_, value)| value).collect()
+        }
     };
-    let entry = entry.ok_or(texts.playlist_empty)?;
-    validate_url(base.join(entry)?, texts)
+    if entries.is_empty() {
+        return Err(texts.playlist_empty.into());
+    }
+    Ok(entries)
+}
+
+fn playlist_streams(
+    base: &Url,
+    format: Playlist,
+    text: &str,
+    texts: &Texts,
+) -> Result<Vec<Url>, BoxError> {
+    // Match playback's first-stream validation; malformed fallback entries are not selectable streams.
+    let first = first_stream(base, format, text, texts)?;
+    let mut streams = vec![first];
+    streams.extend(
+        playlist_entries(format, text, texts)?
+            .into_iter()
+            .skip(1)
+            .filter_map(|entry| {
+                base.join(entry)
+                    .ok()
+                    .and_then(|url| validate_url(url, texts).ok())
+            }),
+    );
+    Ok(streams)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::i18n::Language;
+
+    #[test]
+    fn counts_playlist_streams_in_playback_order() {
+        let texts = Language::English.texts();
+        let base = Url::parse("https://example.org/radio/list.pls").unwrap();
+        let streams = playlist_streams(&base, Playlist::Pls,
+            "[playlist]\nFile4=/four\nFILE1=../one\nFile2=https://example.net/two\nNumberOfEntries=99\n", texts).unwrap();
+        assert_eq!(
+            streams.iter().map(Url::as_str).collect::<Vec<_>>(),
+            [
+                "https://example.org/one",
+                "https://example.net/two",
+                "https://example.org/four"
+            ]
+        );
+        let streams = playlist_streams(
+            &base,
+            Playlist::M3u,
+            "#EXTM3U\n#EXTINF:-1,One\n../one\n\n# Comment\n/two\n",
+            texts,
+        )
+        .unwrap();
+        assert_eq!(streams.len(), 2);
+        assert_eq!(streams[0].as_str(), "https://example.org/one");
+    }
+
+    #[test]
+    fn inspects_http_playlists_and_does_not_display_audio_as_text() {
+        use std::{io::Write, net::TcpListener, thread};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let fixtures = [
+            ("/radio.m3u", "audio/x-mpegurl", "#EXTM3U\n/one\n/two\n"),
+            (
+                "/radio.pls",
+                "audio/x-scpls",
+                "[playlist]\nFile2=/two\nFile1=/one\n",
+            ),
+            ("/live", "audio/mpeg", "audio bytes"),
+        ];
+        let server = thread::spawn(move || {
+            for (path, mime, body) in fixtures {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            assert!(std::time::Instant::now() < deadline, "missing HTTP request");
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = String::new();
+                BufReader::new(&stream).read_line(&mut request).unwrap();
+                assert!(request.starts_with(&format!("GET {path} ")));
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let texts = Language::English.texts();
+        for (path, _, body) in fixtures {
+            let url = Url::parse(&format!("{base}{path}")).unwrap();
+            let info = inspect(&url, texts).unwrap();
+            if path == "/live" {
+                assert_eq!(info.streams, vec![url.clone()]);
+                assert_eq!(info.content, url.as_str());
+            } else {
+                assert_eq!(info.streams.len(), 2);
+                assert_eq!(info.streams[0].as_str(), format!("{base}/one"));
+                assert_eq!(info.content, body);
+            }
+        }
+        server.join().unwrap();
+    }
 
     #[test]
     fn m3u_uses_first_entry_and_resolves_relative_urls() {

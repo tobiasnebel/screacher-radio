@@ -5,6 +5,7 @@ mod icon;
 mod media_keys;
 mod metadata;
 mod playback;
+mod reconnect;
 mod settings;
 mod single_instance;
 mod station;

@@ -1,7 +1,10 @@
 use std::{
     cell::Cell,
+    collections::HashMap,
     path::PathBuf,
     rc::Rc,
+    sync::{Arc, Mutex, mpsc},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -18,9 +21,10 @@ use fltk::{
     group::Group,
     image::RgbImage,
     input::{Input, IntInput},
-    menu::{Choice, MenuBar, MenuFlag},
+    menu::{Choice, MenuBar, MenuButton, MenuButtonType, MenuFlag},
     output::Output,
     prelude::*,
+    text::{TextBuffer, TextDisplay},
     valuator::{SliderType, ValueSlider},
     window::Window,
 };
@@ -32,9 +36,10 @@ use crate::{
     media_keys::{MediaKey, MediaKeys},
     metadata::TrackInfo,
     playback::{OutputDevice, Playback, PlaybackEvent, output_devices},
+    reconnect::Reconnect,
     settings::{self, MediaKeyAction, Settings, Station, Theme, WindowPosition},
     single_instance::Instance,
-    station::station_url,
+    station::{self, StationInfo, station_url},
     theme::Palette,
     tray::Tray,
     window_order,
@@ -54,6 +59,9 @@ pub enum Event {
     Search,
     Select(i32, bool),
     Add,
+    Edit(i32),
+    StationInfo(i32),
+    StationInspected(Url, Result<StationInfo, String>),
     SaveStation,
     Remove,
     Favorite,
@@ -133,6 +141,11 @@ pub fn run() {
         next_device_check: Instant::now(),
         muted: false,
         media_keys: None,
+        reconnect: None,
+        editing: None,
+        info_url: None,
+        station_info: HashMap::new(),
+        inspector: start_station_inspector(messages, texts),
     };
     radio.refresh_stations();
     radio.refresh_playback_buttons();
@@ -198,6 +211,11 @@ struct Radio {
     next_device_check: Instant,
     muted: bool,
     media_keys: Option<MediaKeys>,
+    reconnect: Option<Reconnect>,
+    editing: Option<Url>,
+    info_url: Option<Url>,
+    station_info: HashMap<Url, Result<StationInfo, String>>,
+    inspector: Option<mpsc::Sender<Url>>,
 }
 
 impl Radio {
@@ -240,6 +258,8 @@ impl Radio {
                 }
             }
             Event::Add => {
+                self.editing = None;
+                self.view.station_save.set_label(self.view.texts.add);
                 self.view.name.set_value("");
                 self.view.url.set_value("");
                 show_dialog(
@@ -248,6 +268,17 @@ impl Radio {
                     self.settings.always_on_top,
                 );
                 let _ = self.view.name.take_focus();
+            }
+            Event::Edit(row) => self.edit_station(row),
+            Event::StationInfo(row) => self.show_station_info(row),
+            Event::StationInspected(url, result) => {
+                if self.stations.iter().any(|station| station.url == url) {
+                    self.station_info.insert(url.clone(), result);
+                    self.refresh_stations();
+                    if self.info_url.as_ref() == Some(&url) {
+                        self.refresh_station_info(&url);
+                    }
+                }
             }
             Event::SaveStation => self.add_station(),
             Event::Remove => self.remove_station(),
@@ -373,6 +404,8 @@ impl Radio {
             Event::Playback(..) => {}
         }
         self.sync_media_keys();
+        self.view.set_reconnecting(self.reconnect.is_some());
+        self.refresh_stream_index();
     }
 
     fn sync_media_keys(&mut self) {
@@ -473,6 +506,7 @@ impl Radio {
             self.tray_position = Some((window.x(), window.y(), window.screen_num()));
             self.view.timer_window.hide();
             self.view.settings_window.hide();
+            self.view.station_info_window.hide();
             self.view.window.hide();
         }
     }
@@ -507,7 +541,15 @@ impl Radio {
                     || station.url.as_str().to_lowercase().contains(&query))
             {
                 let marker = if station.favorite { "★  " } else { "     " };
-                self.view.list.add(&format!("{marker}{}", station.name));
+                let entries = self.stream_index(&station.url);
+                let entries = if entries.is_empty() {
+                    entries
+                } else {
+                    format!(" {entries}")
+                };
+                self.view
+                    .list
+                    .add(&format!("{marker}{}{entries}", station.name));
                 self.visible_stations.push(index);
                 if self.selected == Some(index) {
                     self.view.list.select(self.visible_stations.len() as i32);
@@ -561,7 +603,7 @@ impl Radio {
         } else {
             self.view.play.deactivate();
         }
-        if self.playing.is_some() {
+        if self.playing.is_some() || self.reconnect.is_some() {
             self.view.stop.activate();
         } else {
             self.view.stop.deactivate();
@@ -583,25 +625,157 @@ impl Radio {
             dialog::alert_default(self.view.texts.invalid_url);
             return;
         };
-        if self.stations.iter().any(|station| station.url == url) {
+        let editing = self.editing.as_ref().and_then(|original| {
+            self.stations
+                .iter()
+                .position(|station| &station.url == original)
+        });
+        if self.editing.is_some() && editing.is_none() {
+            return;
+        }
+        if self
+            .stations
+            .iter()
+            .enumerate()
+            .any(|(index, station)| Some(index) != editing && station.url == url)
+        {
             dialog::alert_default(self.view.texts.duplicate_url);
             return;
         }
-        let index = self.stations.len();
+        let index = editing.unwrap_or(self.stations.len());
         let mut stations = self.stations.clone();
-        stations.push(Station {
-            name,
-            url,
-            favorite: false,
+        let changed_url = editing.is_some_and(|index| stations[index].url != url);
+        let original = editing.map(|index| stations[index].url.clone());
+        let active = original.as_ref().is_some_and(|original| {
+            self.playing
+                .as_ref()
+                .is_some_and(|playing| &playing.url == original)
+                || self
+                    .reconnect
+                    .as_ref()
+                    .is_some_and(|retry| &retry.url == original)
         });
+        let station = Station {
+            name: name.clone(),
+            url: url.clone(),
+            favorite: editing.is_some_and(|index| stations[index].favorite),
+        };
+        if editing.is_some() {
+            stations[index] = station;
+        } else {
+            stations.push(station);
+        }
         if !self.replace_stations(stations) {
             return;
         }
         self.selected = Some(index);
+        if changed_url && self.settings.last_station == original {
+            self.settings.last_station = Some(url.clone());
+            self.save();
+        }
+        if changed_url && self.info_url == original {
+            self.info_url = Some(url.clone());
+            self.refresh_station_info(&url);
+        }
+        if active && !changed_url {
+            if let Some(playing) = &mut self.playing {
+                playing.name.clone_from(&name);
+                if playing.started_at.is_some() {
+                    self.view.status(&(self.view.texts.playing)(&name));
+                }
+            }
+            if let Some(retry) = &mut self.reconnect {
+                retry.name.clone_from(&name);
+            }
+        }
+        self.editing = None;
         self.view.search.set_value("");
         self.view.favorites.set_value(false);
         self.view.add_window.hide();
         self.refresh_stations();
+        if active && changed_url {
+            self.stop(self.view.texts.playback_stopped);
+            self.play();
+        }
+    }
+
+    fn inspect_station(&self, url: &Url) {
+        if let Some(inspector) = &self.inspector {
+            let _ = inspector.send(url.clone());
+        }
+    }
+
+    fn stream_index(&self, url: &Url) -> String {
+        if !self
+            .playing
+            .as_ref()
+            .is_some_and(|playing| &playing.url == url && playing.started_at.is_some())
+        {
+            return String::new();
+        }
+        self.station_info
+            .get(url)
+            .and_then(|result| result.as_ref().ok())
+            .map_or_else(
+                || "[1/?]".into(),
+                |info| format!("[1/{}]", info.streams.len()),
+            )
+    }
+
+    fn refresh_stream_index(&mut self) {
+        let index = self
+            .playing
+            .as_ref()
+            .map(|playing| self.stream_index(&playing.url))
+            .unwrap_or_default();
+        self.view.stream_info.index.set_label(&index);
+    }
+
+    fn edit_station(&mut self, row: i32) {
+        let Some(&index) = row
+            .checked_sub(1)
+            .and_then(|row| self.visible_stations.get(row as usize))
+        else {
+            return;
+        };
+        let station = &self.stations[index];
+        self.editing = Some(station.url.clone());
+        self.view.name.set_value(&station.name);
+        self.view.url.set_value(station.url.as_str());
+        self.view.station_save.set_label(self.view.texts.save);
+        show_dialog(
+            &self.view.window,
+            &mut self.view.add_window,
+            self.settings.always_on_top,
+        );
+        let _ = self.view.name.take_focus();
+    }
+
+    fn show_station_info(&mut self, row: i32) {
+        let Some(&index) = row
+            .checked_sub(1)
+            .and_then(|row| self.visible_stations.get(row as usize))
+        else {
+            return;
+        };
+        let url = self.stations[index].url.clone();
+        self.info_url = Some(url.clone());
+        self.refresh_station_info(&url);
+        show_dialog(
+            &self.view.window,
+            &mut self.view.station_info_window,
+            self.settings.always_on_top,
+        );
+        self.inspect_station(&url);
+    }
+
+    fn refresh_station_info(&mut self, url: &Url) {
+        let text = match self.station_info.get(url) {
+            Some(Ok(info)) => info.content.clone(),
+            Some(Err(error)) => format!("{url}\n\n{error}"),
+            None => format!("{url}\n\n{}", self.view.texts.loading_station_info),
+        };
+        self.view.station_info_buffer.set_text(&text);
     }
 
     fn remove_station(&mut self) {
@@ -624,6 +798,10 @@ impl Radio {
             .playing
             .as_ref()
             .is_some_and(|playing| playing.url == station.url)
+            || self
+                .reconnect
+                .as_ref()
+                .is_some_and(|retry| retry.url == station.url)
         {
             self.stop(self.view.texts.playback_stopped);
         }
@@ -632,6 +810,10 @@ impl Radio {
             self.save();
         }
         self.selected = None;
+        if self.info_url.as_ref() == Some(&station.url) {
+            self.info_url = None;
+            self.view.station_info_window.hide();
+        }
         self.refresh_stations();
     }
 
@@ -648,10 +830,14 @@ impl Radio {
             return false;
         }
         self.stations = stations;
+        self.station_info
+            .retain(|url, _| self.stations.iter().any(|station| &station.url == url));
         true
     }
 
     fn play(&mut self) {
+        self.reconnect = None;
+        self.view.set_reconnecting(false);
         let stations = &self.stations;
         let selected = self.selected_visible().map(|index| &stations[index]);
         let last = self
@@ -672,6 +858,10 @@ impl Radio {
         }
         let url = station.url.clone();
         let name = station.name.clone();
+        self.start_playback(url, name);
+    }
+
+    fn start_playback(&mut self, url: Url, name: String) {
         self.playing = None;
         self.view.clear_playback();
         self.playback_id += 1;
@@ -693,19 +883,32 @@ impl Radio {
                     meter_due: None,
                 });
             }
-            Err(error) => self
-                .view
-                .status(&(self.view.texts.playback_failed)(&error.to_string())),
+            Err(error) => self.schedule_reconnect(url, name, error.to_string()),
+        }
+        if let Some(retry) = &self.reconnect
+            && retry.due.is_none()
+        {
+            self.view.status(&(self.view.texts.retry_connecting)(
+                &retry.name,
+                retry.attempts,
+            ));
         }
         self.refresh_playback_buttons();
+        self.sync_media_keys();
+        self.refresh_stations();
+        self.refresh_stream_index();
     }
 
     fn stop(&mut self, status: &str) {
+        self.reconnect = None;
+        self.view.set_reconnecting(false);
         self.playing = None;
         self.view.clear_playback();
         self.view.status(status);
         self.refresh_playback_buttons();
         self.sync_media_keys();
+        self.refresh_stations();
+        self.refresh_stream_index();
     }
 
     fn playback_event(&mut self, event: PlaybackEvent) {
@@ -714,11 +917,16 @@ impl Radio {
         };
         match event {
             PlaybackEvent::Started(at) => {
+                self.reconnect = None;
+                self.view.set_reconnecting(false);
                 playing.started_at = Some(at);
                 playing.meter_due = Some(at);
                 self.view.status(&(self.view.texts.playing)(&playing.name));
                 self.settings.last_station = Some(playing.url.clone());
+                let url = playing.url.clone();
                 self.save();
+                self.refresh_stations();
+                self.inspect_station(&url);
             }
             PlaybackEvent::TrackChanged(track) => self.view.stream_info.set_track(&track),
             PlaybackEvent::AudioDeviceUnavailable(device) => {
@@ -726,12 +934,30 @@ impl Radio {
                     self.set_audio_device(None);
                 }
             }
-            PlaybackEvent::Ended => self.stop(self.view.texts.stream_ended),
+            PlaybackEvent::Ended => {
+                let url = playing.url.clone();
+                let name = playing.name.clone();
+                self.schedule_reconnect(url, name, self.view.texts.stream_ended.to_owned());
+            }
             PlaybackEvent::Failed(error) => {
-                let status = (self.view.texts.station_error)(&playing.name, &error);
-                self.stop(&status);
+                let url = playing.url.clone();
+                let name = playing.name.clone();
+                self.schedule_reconnect(url, name, error);
             }
         }
+    }
+
+    fn schedule_reconnect(&mut self, url: Url, name: String, reason: String) {
+        self.playing = None;
+        self.view.clear_playback();
+        let retry = self
+            .reconnect
+            .get_or_insert_with(|| Reconnect::new(url, name));
+        retry.schedule(Instant::now(), reason);
+        self.view.set_reconnecting(true);
+        self.refresh_playback_buttons();
+        self.refresh_stations();
+        self.refresh_stream_index();
     }
 
     fn start_timer(&mut self, preset: Option<u64>) {
@@ -783,6 +1009,26 @@ impl Radio {
             Some(seconds)
         });
         self.view.set_timer_countdown(timer_seconds);
+        if let Some(retry) = &mut self.reconnect
+            && let Some(due) = retry.due
+        {
+            if now >= due {
+                retry.due = None;
+                let url = retry.url.clone();
+                let name = retry.name.clone();
+                self.start_playback(url, name);
+                wait = wait.min(1.0);
+            } else {
+                let remaining = due.duration_since(now).as_secs_f64();
+                self.view.status(&(self.view.texts.retry_wait)(
+                    &retry.name,
+                    retry.attempts,
+                    remaining.ceil() as u64,
+                    &retry.reason,
+                ));
+                wait = wait.min(remaining.min(1.0));
+            }
+        }
         if let Some(at) = self.save_at {
             if now >= at {
                 self.save();
@@ -834,6 +1080,30 @@ fn fit_window_position(
             y.saturating_add(height.saturating_sub(window_height).max(0)),
         ),
     }
+}
+
+fn start_station_inspector(
+    messages: Sender<Event>,
+    texts: &'static Texts,
+) -> Option<mpsc::Sender<Url>> {
+    let (requests, pending) = mpsc::channel::<Url>();
+    let pending = Arc::new(Mutex::new(pending));
+    for index in 0..2 {
+        let pending = pending.clone();
+        thread::Builder::new()
+            .name(format!("station-info-{index}"))
+            .spawn(move || {
+                loop {
+                    let Ok(url) = pending.lock().expect("station-info queue").recv() else {
+                        break;
+                    };
+                    let info = station::inspect(&url, texts).map_err(|error| error.to_string());
+                    messages.send(Event::StationInspected(url, info));
+                }
+            })
+            .ok()?;
+    }
+    Some(requests)
 }
 
 fn scroll_volume(slider: &mut ValueSlider) -> bool {
@@ -900,9 +1170,11 @@ struct View {
     timer_button: Button,
     meter: StereoMeter,
     status: Frame,
+    reconnect_cancel: Button,
     add_window: Window,
     name: Input,
     url: Input,
+    station_save: Button,
     timer_window: Window,
     minutes: IntInput,
     extend_label: Frame,
@@ -914,6 +1186,8 @@ struct View {
     minimize: CheckButton,
     tray_note: Frame,
     about_window: Window,
+    station_info_window: Window,
+    station_info_buffer: TextBuffer,
 }
 
 impl View {
@@ -998,7 +1272,38 @@ impl View {
         list.set_format_char('\r');
         list.set_column_char('\t');
         list.set_callback(move |list| {
-            messages.send(Event::Select(list.value(), app::event_clicks()))
+            messages.send(Event::Select(
+                list.value(),
+                app::event_mouse_button() == app::MouseButton::Left && app::event_clicks(),
+            ))
+        });
+        // A menu widget supplies FLTK with its parent window and local mouse coordinates.
+        let mut context_menu = MenuButton::new(0, 0, 0, 0, None);
+        context_menu.set_type(MenuButtonType::Popup3);
+        context_menu.add_choice(texts.edit);
+        context_menu.add_choice(texts.station_info);
+        context_menu.hide();
+        list.handle(move |list, event| {
+            if event == FltkEvent::Push && app::event_mouse_button() == app::MouseButton::Right {
+                let row = list.value();
+                if row > 0 {
+                    // The menu creates its native window inside popup's nested event loop.
+                    app::add_timeout3(0.0, |_| {
+                        if let Some(popup) = app::grab() {
+                            window_order::set_on_top(&popup, true);
+                        }
+                    });
+                    if let Some(item) = context_menu.popup() {
+                        if item.label().as_deref() == Some(texts.edit) {
+                            messages.send(Event::Edit(row));
+                        } else {
+                            messages.send(Event::StationInfo(row));
+                        }
+                    }
+                }
+                return true;
+            }
+            false
         });
         let mut empty = Frame::new(24, 158, 258, 36, None);
         empty.set_label_color(Color::Dark3);
@@ -1040,6 +1345,10 @@ impl View {
         let meter = StereoMeter::new(texts);
         let mut status = Frame::new(12, 421, 576, 22, texts.ready);
         status.set_align(Align::Inside | Align::Left | Align::Clip);
+        let mut reconnect_cancel = Button::new(566, 421, 22, 22, "@radio_close");
+        reconnect_cancel.set_tooltip(texts.cancel_reconnect);
+        reconnect_cancel.emit(messages, Event::Stop);
+        reconnect_cancel.hide();
         window.end();
         window.resizable(&station_area);
         window.size_range(600, 452, 0, 0);
@@ -1282,6 +1591,23 @@ impl View {
         about_window.end();
         about_window.make_modal(true);
 
+        let mut station_info_window = Window::default()
+            .with_size(540, 360)
+            .with_label(texts.station_info);
+        station_info_window.set_border(false);
+        style_window_frame(&mut station_info_window);
+        let station_info_buffer = TextBuffer::default();
+        let mut content = TextDisplay::new(14, 14, 512, 288, None);
+        content.set_buffer(station_info_buffer.clone());
+        content.set_text_font(Font::Courier);
+        content.set_text_size(13);
+        let mut close = Button::new(426, 318, 100, 28, texts.close);
+        let mut info_dialog = station_info_window.clone();
+        close.set_callback(move |_| info_dialog.hide());
+        station_info_window.end();
+        station_info_window.make_modal(false);
+        station_info_window.set_callback(|window| window.hide());
+
         let mut view = Self {
             texts,
             window,
@@ -1300,9 +1626,11 @@ impl View {
             timer_button,
             meter,
             status,
+            reconnect_cancel,
             add_window,
             name,
             url,
+            station_save: save,
             timer_window,
             minutes,
             extend_label,
@@ -1314,6 +1642,8 @@ impl View {
             minimize,
             tray_note,
             about_window,
+            station_info_window,
+            station_info_buffer,
         };
         if settings.theme != Theme::Standard {
             view.apply_theme(settings.theme);
@@ -1370,6 +1700,7 @@ impl View {
             &self.settings_window,
             &self.add_window,
             &self.about_window,
+            &self.station_info_window,
         ] {
             window_order::set_on_top(window, enabled);
         }
@@ -1381,6 +1712,7 @@ impl View {
             &self.settings_window,
             &self.timer_window,
             &self.about_window,
+            &self.station_info_window,
         ];
         // FLTK orders shown windows by most recent activation. Prefer the frontmost dialog.
         if let Some(mut window) = app::windows().into_iter().flatten().find(|window| {
@@ -1415,6 +1747,23 @@ impl View {
     fn status(&mut self, status: &str) {
         self.status.set_label(status);
         self.status.set_tooltip(status);
+    }
+
+    fn set_reconnecting(&mut self, active: bool) {
+        let width = self.window.w();
+        self.status.resize(
+            12,
+            self.status.y(),
+            width - if active { 54 } else { 24 },
+            22,
+        );
+        self.reconnect_cancel
+            .resize(width - 34, self.status.y(), 22, 22);
+        if active {
+            self.reconnect_cancel.show();
+        } else {
+            self.reconnect_cancel.hide();
+        }
     }
 
     fn clear_playback(&mut self) {
@@ -1524,6 +1873,7 @@ fn menu_entry_at(menu: &MenuBar, x: i32) -> bool {
 
 struct StreamInfo {
     panel: Group,
+    index: Frame,
     title: Output,
     artist: Output,
     elapsed: Output,
@@ -1534,9 +1884,12 @@ impl StreamInfo {
     fn new(texts: &Texts) -> Self {
         let mut panel = Group::new(306, 90, 282, 205, None);
         panel.set_frame(FrameType::BorderBox);
-        let mut heading = Frame::new(318, 100, 258, 22, texts.stream_information);
+        let mut heading = Frame::new(318, 100, 198, 22, texts.stream_information);
         heading.set_align(Align::Inside | Align::Left);
         heading.set_label_font(Font::HelveticaBold);
+        let mut index = Frame::new(318, 100, 258, 22, None);
+        index.set_align(Align::Inside | Align::Right);
+        index.set_label_font(Font::HelveticaBold);
         let [title, artist, elapsed] = [
             (texts.title, 129),
             (texts.artist, 183),
@@ -1551,6 +1904,7 @@ impl StreamInfo {
         panel.end();
         Self {
             panel,
+            index,
             title,
             artist,
             elapsed,
@@ -1909,6 +2263,11 @@ mod tests {
             next_device_check: Instant::now(),
             muted: false,
             media_keys: None,
+            reconnect: None,
+            editing: None,
+            info_url: None,
+            station_info: HashMap::new(),
+            inspector: None,
         };
         let wait_until = |condition: &dyn Fn() -> bool| {
             let deadline = Instant::now() + Duration::from_secs(3);
@@ -2032,6 +2391,154 @@ mod tests {
         radio.handle(Event::MediaKeyActionChanged(MediaKeyAction::Playback));
         radio.handle(Event::MediaKey(MediaKey::Pause));
         assert!(radio.view.window.visible());
+
+        let old_url = Url::parse("http://127.0.0.1:9/list.m3u").unwrap();
+        let new_url = Url::parse("https://example.org/edited.pls").unwrap();
+        let station_path = dir.path().join("stations.yaml");
+        radio.stations_path = Some(station_path.clone());
+        radio.stations = vec![Station {
+            name: "Original".into(),
+            url: old_url.clone(),
+            favorite: true,
+        }];
+        radio.settings.last_station = Some(old_url.clone());
+        radio.selected = Some(0);
+        let (inspector, inspections) = mpsc::channel();
+        radio.inspector = Some(inspector);
+        radio.refresh_stations();
+        assert!(
+            inspections.try_recv().is_err(),
+            "listing stations must not make HTTP requests"
+        );
+        let playlist = StationInfo {
+            streams: [
+                "https://example.org/one",
+                "https://example.org/two",
+                "https://example.org/three",
+                "https://example.org/four",
+            ]
+            .map(|url| Url::parse(url).unwrap())
+            .to_vec(),
+            content: "#EXTM3U\n/one\n/two\n/three\n/four\n".into(),
+        };
+        radio.handle(Event::StationInspected(
+            old_url.clone(),
+            Ok(playlist.clone()),
+        ));
+        assert!(!radio.view.list.text(1).unwrap().contains("[1/"));
+        assert!(radio.view.stream_info.index.label().is_empty());
+        radio.play();
+        assert!(
+            inspections.try_recv().is_err(),
+            "wait until playback has started before inspecting"
+        );
+        let id = radio.playback_id;
+        radio.handle(Event::Playback(id, PlaybackEvent::Started(Instant::now())));
+        assert_eq!(inspections.try_recv().unwrap(), old_url);
+        assert!(radio.view.list.text(1).unwrap().contains("[1/4]"));
+        assert_eq!(radio.view.stream_info.index.label(), "[1/4]");
+        assert!(radio.view.stream_info.index.align().contains(Align::Right));
+        radio.stop(radio.view.texts.playback_stopped);
+        assert!(!radio.view.list.text(1).unwrap().contains("[1/"));
+        assert!(radio.view.stream_info.index.label().is_empty());
+
+        // Exercise the real popup while its parent is topmost, without moving the user's mouse.
+        radio.handle(Event::AlwaysOnTop(true));
+        let (screen_x, screen_y, _, _) = app::screen_work_area(radio.view.window.screen_num());
+        radio.view.window.set_pos(screen_x + 200, screen_y + 150);
+        let popup_result = Rc::new(Cell::new(None));
+        let observed = popup_result.clone();
+        app::add_timeout3(0.05, move |_| {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GWL_EXSTYLE, GetWindowLongPtrW, SendMessageW, WM_KEYDOWN, WM_KEYUP, WS_EX_TOPMOST,
+            };
+            if let Some(popup) = app::grab() {
+                let hwnd = popup.raw_handle();
+                let topmost =
+                    unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST != 0;
+                observed.set(Some((popup.x(), popup.y(), topmost)));
+                unsafe {
+                    SendMessageW(hwnd, WM_KEYDOWN, 0x1b, 0x10001);
+                    SendMessageW(hwnd, WM_KEYUP, 0x1b, 0xc0010001);
+                }
+            }
+        });
+        let scale = app::screen_scale(radio.view.window.screen_num());
+        let client = (100.0 * scale).round() as isize;
+        unsafe {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_RBUTTONDOWN};
+            SendMessageW(
+                radio.view.window.raw_handle(),
+                WM_RBUTTONDOWN,
+                2,
+                (client << 16) | client,
+            );
+        }
+        let (popup_x, popup_y, topmost) = popup_result
+            .get()
+            .expect("right-click must open the station menu");
+        assert!(
+            (popup_x - (radio.view.window.x() + 100)).abs() < 40,
+            "popup x={popup_x}"
+        );
+        assert!(
+            (popup_y - (radio.view.window.y() + 100)).abs() < 40,
+            "popup y={popup_y}"
+        );
+        assert!(topmost, "popup must be above an always-on-top main window");
+        radio.handle(Event::AlwaysOnTop(false));
+        radio.handle(Event::Edit(1));
+        assert_eq!(radio.view.name.value(), "Original");
+        radio.view.name.set_value("Edited station");
+        radio.view.url.set_value(new_url.as_str());
+        radio.handle(Event::SaveStation);
+        let saved = settings::load_stations(&station_path, &[], Language::English.texts()).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].name, "Edited station");
+        assert_eq!(saved[0].url, new_url);
+        assert!(saved[0].favorite);
+        assert_eq!(radio.settings.last_station, Some(new_url.clone()));
+        assert!(
+            inspections.try_recv().is_err(),
+            "editing must not inspect an idle station"
+        );
+        radio.handle(Event::StationInspected(
+            new_url.clone(),
+            Ok(playlist.clone()),
+        ));
+        radio.handle(Event::StationInfo(1));
+        assert_eq!(inspections.try_recv().unwrap(), new_url);
+        assert!(radio.view.station_info_window.w() < radio.view.window.w());
+        assert_eq!(radio.view.station_info_buffer.text(), playlist.content);
+        radio.handle(Event::Escape);
+        assert!(!radio.view.station_info_window.visible());
+        assert!(radio.view.window.visible());
+
+        radio.schedule_reconnect(
+            new_url.clone(),
+            "Edited station".into(),
+            "Disconnected".into(),
+        );
+        assert!(radio.view.reconnect_cancel.visible());
+        let playback_id = radio.playback_id;
+        radio.view.reconnect_cancel.do_callback();
+        while let Some(event) = events.recv() {
+            radio.handle(event);
+        }
+        assert!(radio.reconnect.is_none());
+        assert!(!radio.view.reconnect_cancel.visible());
+        radio.handle(Event::Playback(
+            playback_id,
+            PlaybackEvent::Failed("Late error".into()),
+        ));
+        assert!(radio.reconnect.is_none());
+        radio.update(Instant::now() + Duration::from_secs(120));
+        assert_eq!(radio.playback_id, playback_id);
+        radio.schedule_reconnect(new_url, "Edited station".into(), "Disconnected".into());
+        radio.timer = Some(Instant::now());
+        radio.update(Instant::now());
+        assert!(radio.reconnect.is_none());
+        assert_eq!(radio.playback_id, playback_id);
         radio.view.window.hide();
     }
 

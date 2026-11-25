@@ -8,7 +8,7 @@ A small, lightweight web radio player with a minimalistic interface.
 
 - 🖥️ Windows & Linux support
 - 🪶 Minimalistic UI
-- 📻 Station list with search and favorites
+- 📻 Editable station list with search, favorites & playlist entry counts
 - 🎵 Direct MP3 streams and M3U / PLS playlists
 - 🔽 Tray icon and minimize to tray
 - ⏲️ Sleep timer with presets and extensions
@@ -16,6 +16,7 @@ A small, lightweight web radio player with a minimalistic interface.
 - 🎨 Simple themes: Standard, Dark & Light
 - ⏯️ Configurable Play/Pause media key: playback control or show/minimize the player
 - 🔁 Optional autoplay of the last station
+- 🔌 Automatic reconnection with cancellable retries
 - 🔊 Volume control, mute & stereo level meters
 - 📝 Track information when available
 - 🌍 English & German interface
@@ -29,6 +30,8 @@ A small, lightweight web radio player with a minimalistic interface.
 - **Optional:** Place `stations.yaml` next to the executable to start with a prepared station list. The file is also available as a release download.
 
 Add your own stations through **File → Add station** or edit the station list below.
+
+Right-click a station to **Edit** its name and URL or open **Stream info** to view its playlist contents.
 
 ## 📻 Your station list
 

@@ -74,14 +74,14 @@ pub fn show_in_taskbar(window: &Window) {
 #[cfg(not(windows))]
 pub fn show_in_taskbar(_: &Window) {}
 
-pub fn set_on_top(window: &Window, enabled: bool) {
+pub fn set_on_top(window: &impl WindowExt, enabled: bool) {
     if window.shown() {
         set_native(window, enabled);
     }
 }
 
 #[cfg(windows)]
-fn set_native(window: &Window, enabled: bool) {
+fn set_native(window: &impl WindowExt, enabled: bool) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
     };
@@ -106,7 +106,7 @@ fn set_native(window: &Window, enabled: bool) {
 }
 
 #[cfg(target_os = "linux")]
-fn set_native(window: &Window, enabled: bool) {
+fn set_native(window: &impl WindowExt, enabled: bool) {
     use std::{mem::MaybeUninit, os::raw::c_ulong};
     use x11::xlib;
 
@@ -152,4 +152,4 @@ fn set_native(window: &Window, enabled: bool) {
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-fn set_native(_: &Window, _: bool) {}
+fn set_native(_: &impl WindowExt, _: bool) {}
