@@ -8,7 +8,7 @@ A small, lightweight web radio player with a minimalistic interface.
 
 - 🖥️ Windows & Linux support
 - 🪶 Minimalistic UI
-- 📻 Station list with search and favorites
+- 📻 Editable station list with search, favorites & playlist entry counts
 - 🎵 Direct MP3 streams and M3U / PLS playlists
 - 🔽 Tray icon and minimize to tray
 - ⏲️ Sleep timer with presets and extensions
@@ -16,6 +16,7 @@ A small, lightweight web radio player with a minimalistic interface.
 - 🎨 Simple themes: Standard, Dark & Light
 - ⏯️ Configurable Play/Pause media key: playback control or show/minimize the player
 - 🔁 Optional autoplay of the last station
+- 🔌 Automatic reconnection with cancellable retries
 - 🔊 Volume control, mute & stereo level meters
 - 📝 Track information when available
 - 🌍 English & German interface
@@ -30,6 +31,8 @@ A small, lightweight web radio player with a minimalistic interface.
 
 Add your own stations through **File → Add station** or edit the station list below.
 
+Right-click a station to **Edit** its name and URL or open **Stream info** to view its playlist contents.
+
 ## 📻 Your station list
 
 Stations and favorites are stored in **`stations.yaml` next to the executable**. You can use the [included station list](media/station_lists/stations.yaml) or create your own:
@@ -43,7 +46,7 @@ Stations and favorites are stored in **`stations.yaml` next to the executable**.
   favorite: false
 ```
 
-Replace these example URLs with your stations' HTTP(S) addresses. Direct MP3 streams and M3U / PLS playlists are supported; a playlist is treated as one station and plays its first stream.
+Replace these example URLs with your stations' HTTP(S) addresses. Direct MP3 streams and M3U / PLS playlists are supported; a playlist is treated as one station and starts with its first stream. Use the two triangle icons below the stream index to play the previous or next stream.
 
 The player saves changes to this file, so its folder must be writable. Close the player before editing the YAML manually. You can take the list with you by copying it alongside the executable.
 

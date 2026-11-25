@@ -23,6 +23,17 @@ pub(super) static TEXTS: Texts = Texts {
     name: "Name",
     url_hint: "HTTP(S) URL for an MP3 stream or M3U/PLS playlist",
     add: "Add",
+    edit: "Edit",
+    save: "Save",
+    station_info: "Stream info",
+    previous_stream: "Play previous stream",
+    next_stream: "Play next stream",
+    loading_station_info: "Loading stream information…",
+    cancel_reconnect: "Cancel reconnection attempts",
+    retry_wait: |name, attempt, seconds, reason| {
+        format!("{name}: reconnect #{attempt} in {seconds}s — {reason}")
+    },
+    retry_connecting: |name, attempt| format!("{name}: reconnecting (attempt #{attempt})…"),
     sleep_timer: "Sleep timer",
     start_for: "Start for",
     extend: "Extend",
@@ -96,9 +107,7 @@ pub(super) static TEXTS: Texts = Texts {
         format!("Could not save the station list.\n{path}\n{error}")
     },
     connecting: |station| format!("Connecting to {station} …"),
-    playback_failed: |error| format!("Could not start playback ({error})."),
     playing: |station| format!("Playing: {station}"),
-    station_error: |station, error| format!("{station}: {error}"),
     settings_save_failed: |error| format!("Could not save settings: {error}"),
     timer_preset: |minutes| format!("{minutes} min"),
     timer_extension: |minutes| format!("+{minutes} min"),

@@ -23,6 +23,17 @@ pub(super) static TEXTS: Texts = Texts {
     name: "Name",
     url_hint: "HTTP(S)-Adresse eines MP3-Streams oder einer M3U-/PLS-Playlist",
     add: "Hinzufügen",
+    edit: "Editieren",
+    save: "Speichern",
+    station_info: "Stream-Info",
+    previous_stream: "Vorherigen Stream abspielen",
+    next_stream: "Nächsten Stream abspielen",
+    loading_station_info: "Stream-Informationen werden geladen…",
+    cancel_reconnect: "Wiederverbindungsversuche abbrechen",
+    retry_wait: |name, attempt, seconds, reason| {
+        format!("{name}: Wiederverbindung #{attempt} in {seconds}s — {reason}")
+    },
+    retry_connecting: |name, attempt| format!("{name}: Wiederverbindung (Versuch #{attempt})…"),
     sleep_timer: "Sleeptimer",
     start_for: "Starten für",
     extend: "Verlängern",
@@ -102,9 +113,7 @@ pub(super) static TEXTS: Texts = Texts {
         format!("Senderliste konnte nicht gespeichert werden.\n{path}\n{error}")
     },
     connecting: |station| format!("Verbinde mit {station} …"),
-    playback_failed: |error| format!("Wiedergabe konnte nicht gestartet werden ({error})."),
     playing: |station| format!("Spielt: {station}"),
-    station_error: |station, error| format!("{station}: {error}"),
     settings_save_failed: |error| {
         format!("Einstellungen konnten nicht gespeichert werden: {error}")
     },
