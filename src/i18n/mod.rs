@@ -93,6 +93,8 @@ pub struct Texts {
     pub edit: &'static str,
     pub save: &'static str,
     pub station_info: &'static str,
+    pub previous_stream: &'static str,
+    pub next_stream: &'static str,
     pub loading_station_info: &'static str,
     pub cancel_reconnect: &'static str,
     pub retry_wait: fn(&str, u64, u64, &str) -> String,

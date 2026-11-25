@@ -26,6 +26,8 @@ pub(super) static TEXTS: Texts = Texts {
     edit: "Editieren",
     save: "Speichern",
     station_info: "Stream-Info",
+    previous_stream: "Vorherigen Stream abspielen",
+    next_stream: "Nächsten Stream abspielen",
     loading_station_info: "Stream-Informationen werden geladen…",
     cancel_reconnect: "Wiederverbindungsversuche abbrechen",
     retry_wait: |name, attempt, seconds, reason| {

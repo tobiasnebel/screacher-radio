@@ -39,7 +39,7 @@ use crate::{
     reconnect::Reconnect,
     settings::{self, MediaKeyAction, Settings, Station, Theme, WindowPosition},
     single_instance::Instance,
-    station::{self, StationInfo, station_url},
+    station::{self, StationInfo, StreamSelection, station_url},
     theme::Palette,
     tray::Tray,
     window_order,
@@ -66,6 +66,8 @@ pub enum Event {
     Remove,
     Favorite,
     Play,
+    PreviousStream,
+    NextStream,
     Stop,
     Volume(u8),
     ToggleMute,
@@ -188,6 +190,7 @@ pub fn run() {
 struct Playing {
     url: Url,
     name: String,
+    stream: Option<StreamSelection>,
     playback: Playback,
     started_at: Option<Instant>,
     meter_due: Option<Instant>,
@@ -292,6 +295,8 @@ impl Radio {
                 }
             }
             Event::Play => self.play(),
+            Event::PreviousStream => self.change_stream(false),
+            Event::NextStream => self.change_stream(true),
             Event::MediaKey(key) => self.media_key(key),
             Event::MediaKeyActionChanged(action) => {
                 self.settings.media_key_action = action;
@@ -718,7 +723,14 @@ impl Radio {
             .and_then(|result| result.as_ref().ok())
             .map_or_else(
                 || "[1/?]".into(),
-                |info| format!("[1/{}]", info.streams.len()),
+                |info| {
+                    let index = self
+                        .playing
+                        .as_ref()
+                        .and_then(|playing| playing.stream.as_ref())
+                        .map_or(0, |stream| stream.index);
+                    format!("[{}/{}]", index + 1, info.streams.len())
+                },
             )
     }
 
@@ -729,6 +741,81 @@ impl Radio {
             .map(|playing| self.stream_index(&playing.url))
             .unwrap_or_default();
         self.view.stream_info.index.set_label(&index);
+        let right = self.view.stream_info.index.x() + self.view.stream_info.index.w();
+        let y = self.view.stream_info.index.y() + self.view.stream_info.index.h() + 3;
+        self.view.stream_info.previous.resize(right - 58, y, 26, 22);
+        self.view.stream_info.next.resize(right - 26, y, 26, 22);
+        let navigation = self.navigation_target().and_then(|(url, _, index)| {
+            self.station_info
+                .get(url)
+                .and_then(|info| info.as_ref().ok())
+                .map(|info| (index, info.streams.len()))
+        });
+        for (button, enabled) in [
+            (
+                &mut self.view.stream_info.previous,
+                navigation.is_some_and(|(index, _)| index > 0),
+            ),
+            (
+                &mut self.view.stream_info.next,
+                navigation.is_some_and(|(index, count)| index + 1 < count),
+            ),
+        ] {
+            if enabled {
+                button.activate();
+            } else {
+                button.deactivate();
+            }
+        }
+    }
+
+    fn navigation_target(&self) -> Option<(&Url, &str, usize)> {
+        self.playing
+            .as_ref()
+            .map(|playing| {
+                (
+                    &playing.url,
+                    playing.name.as_str(),
+                    playing.stream.as_ref().map_or(0, |stream| stream.index),
+                )
+            })
+            .or_else(|| {
+                self.reconnect.as_ref().map(|retry| {
+                    (
+                        &retry.url,
+                        retry.name.as_str(),
+                        retry.stream.as_ref().map_or(0, |stream| stream.index),
+                    )
+                })
+            })
+    }
+
+    fn change_stream(&mut self, next: bool) {
+        let Some((station_url, name, current)) = self.navigation_target() else {
+            return;
+        };
+        let Some(Ok(info)) = self.station_info.get(station_url) else {
+            return;
+        };
+        let Some(index) = (if next {
+            current.checked_add(1)
+        } else {
+            current.checked_sub(1)
+        }) else {
+            return;
+        };
+        let Some(url) = info.streams.get(index) else {
+            return;
+        };
+        let stream = StreamSelection {
+            index,
+            url: url.clone(),
+        };
+        let url = station_url.clone();
+        let name = name.to_owned();
+        self.reconnect = None;
+        self.view.set_reconnecting(false);
+        self.start_playback(url, name, Some(stream));
     }
 
     fn edit_station(&mut self, row: i32) {
@@ -858,15 +945,17 @@ impl Radio {
         }
         let url = station.url.clone();
         let name = station.name.clone();
-        self.start_playback(url, name);
+        self.start_playback(url, name, None);
     }
 
-    fn start_playback(&mut self, url: Url, name: String) {
+    fn start_playback(&mut self, url: Url, name: String, stream: Option<StreamSelection>) {
         self.playing = None;
         self.view.clear_playback();
         self.playback_id += 1;
         match Playback::start(
-            url.clone(),
+            stream
+                .as_ref()
+                .map_or_else(|| url.clone(), |stream| stream.url.clone()),
             if self.muted { 0 } else { self.settings.volume },
             self.playback_id,
             self.messages,
@@ -878,12 +967,18 @@ impl Radio {
                 self.playing = Some(Playing {
                     url,
                     name,
+                    stream,
                     playback,
                     started_at: None,
                     meter_due: None,
                 });
             }
-            Err(error) => self.schedule_reconnect(url, name, error.to_string()),
+            Err(error) => {
+                self.schedule_reconnect(url, name, error.to_string());
+                if let Some(retry) = &mut self.reconnect {
+                    retry.stream = stream;
+                }
+            }
         }
         if let Some(retry) = &self.reconnect
             && retry.due.is_none()
@@ -924,9 +1019,13 @@ impl Radio {
                 self.view.status(&(self.view.texts.playing)(&playing.name));
                 self.settings.last_station = Some(playing.url.clone());
                 let url = playing.url.clone();
+                let inspect = playing.stream.is_none();
                 self.save();
                 self.refresh_stations();
-                self.inspect_station(&url);
+                // Navigation already has a resolved URL list; do not refetch it on every step.
+                if inspect {
+                    self.inspect_station(&url);
+                }
             }
             PlaybackEvent::TrackChanged(track) => self.view.stream_info.set_track(&track),
             PlaybackEvent::AudioDeviceUnavailable(device) => {
@@ -948,11 +1047,14 @@ impl Radio {
     }
 
     fn schedule_reconnect(&mut self, url: Url, name: String, reason: String) {
-        self.playing = None;
+        let playing = self.playing.take();
         self.view.clear_playback();
         let retry = self
             .reconnect
             .get_or_insert_with(|| Reconnect::new(url, name));
+        if let Some(playing) = playing {
+            retry.stream = playing.stream;
+        }
         retry.schedule(Instant::now(), reason);
         self.view.set_reconnecting(true);
         self.refresh_playback_buttons();
@@ -1016,7 +1118,8 @@ impl Radio {
                 retry.due = None;
                 let url = retry.url.clone();
                 let name = retry.name.clone();
-                self.start_playback(url, name);
+                let stream = retry.stream.clone();
+                self.start_playback(url, name, stream);
                 wait = wait.min(1.0);
             } else {
                 let remaining = due.duration_since(now).as_secs_f64();
@@ -1196,6 +1299,13 @@ impl View {
         app::add_symbol("radio_clock", true, draw_clock).expect("register clock symbol");
         app::add_symbol("radio_speaker", true, draw_speaker).expect("register speaker symbol");
         app::add_symbol("radio_play", true, draw_play).expect("register play symbol");
+        app::add_symbol("radio_previous", true, |color| {
+            draw::push_matrix();
+            draw::scale_xy(-1.0, 1.0);
+            draw_play(color);
+            draw::pop_matrix();
+        })
+        .expect("register previous-stream symbol");
         app::add_symbol("radio_stop", true, draw_stop).expect("register stop symbol");
         app::add_symbol("radio_gear", true, draw_gear).expect("register gear symbol");
         app::add_symbol("radio_close", true, draw_close).expect("register close symbol");
@@ -1307,7 +1417,7 @@ impl View {
         });
         let mut empty = Frame::new(24, 158, 258, 36, None);
         empty.set_label_color(Color::Dark3);
-        let stream_info = StreamInfo::new(texts);
+        let stream_info = StreamInfo::new(texts, messages);
         station_area.end();
         let mut add = Button::new(12, 305, 118, 28, texts.add_action);
         add.emit(messages, Event::Add);
@@ -1361,6 +1471,8 @@ impl View {
         });
         let drag_menu = menu.clone();
         let drag_panel = stream_info.panel.clone();
+        let previous_stream = stream_info.previous.clone();
+        let next_stream = stream_info.next.clone();
         let drag_status = status.clone();
         let drag_meter = meter.frame.clone();
         let mut meter_volume = volume.clone();
@@ -1374,7 +1486,9 @@ impl View {
                 }
                 FltkEvent::Push
                     if app::event_mouse_button() == app::MouseButton::Left
-                        && (app::event_inside_widget(&drag_panel)
+                        && ((app::event_inside_widget(&drag_panel)
+                            && !app::event_inside_widget(&previous_stream)
+                            && !app::event_inside_widget(&next_stream))
                             || app::event_inside_widget(&drag_status)
                             || app::event_inside_widget(&drag_meter)
                             || (app::event_inside_widget(&drag_menu)
@@ -1874,6 +1988,8 @@ fn menu_entry_at(menu: &MenuBar, x: i32) -> bool {
 struct StreamInfo {
     panel: Group,
     index: Frame,
+    previous: Button,
+    next: Button,
     title: Output,
     artist: Output,
     elapsed: Output,
@@ -1881,7 +1997,7 @@ struct StreamInfo {
 }
 
 impl StreamInfo {
-    fn new(texts: &Texts) -> Self {
+    fn new(texts: &Texts, messages: Sender<Event>) -> Self {
         let mut panel = Group::new(306, 90, 282, 205, None);
         panel.set_frame(FrameType::BorderBox);
         let mut heading = Frame::new(318, 100, 198, 22, texts.stream_information);
@@ -1890,6 +2006,16 @@ impl StreamInfo {
         let mut index = Frame::new(318, 100, 258, 22, None);
         index.set_align(Align::Inside | Align::Right);
         index.set_label_font(Font::HelveticaBold);
+        let mut previous = Button::new(518, 125, 26, 22, "@radio_previous");
+        previous.set_frame(FrameType::FlatBox);
+        previous.set_tooltip(texts.previous_stream);
+        previous.emit(messages, Event::PreviousStream);
+        previous.deactivate();
+        let mut next = Button::new(550, 125, 26, 22, "@radio_play");
+        next.set_frame(FrameType::FlatBox);
+        next.set_tooltip(texts.next_stream);
+        next.emit(messages, Event::NextStream);
+        next.deactivate();
         let [title, artist, elapsed] = [
             (texts.title, 129),
             (texts.artist, 183),
@@ -1905,6 +2031,8 @@ impl StreamInfo {
         Self {
             panel,
             index,
+            previous,
+            next,
             title,
             artist,
             elapsed,
@@ -2412,10 +2540,10 @@ mod tests {
         );
         let playlist = StationInfo {
             streams: [
-                "https://example.org/one",
-                "https://example.org/two",
-                "https://example.org/three",
-                "https://example.org/four",
+                "http://127.0.0.1:9/one",
+                "http://127.0.0.1:9/two",
+                "http://127.0.0.1:9/three",
+                "http://127.0.0.1:9/four",
             ]
             .map(|url| Url::parse(url).unwrap())
             .to_vec(),
@@ -2438,7 +2566,102 @@ mod tests {
         assert!(radio.view.list.text(1).unwrap().contains("[1/4]"));
         assert_eq!(radio.view.stream_info.index.label(), "[1/4]");
         assert!(radio.view.stream_info.index.align().contains(Align::Right));
+        assert!(!radio.view.stream_info.previous.active());
+        assert!(radio.view.stream_info.next.active());
+        let timer = radio.timer;
+        let position = (radio.view.window.x(), radio.view.window.y());
+        // Click the real next symbol: the panel's drag handler must not consume it.
+        let button = &radio.view.stream_info.next;
+        let scale = app::screen_scale(radio.view.window.screen_num());
+        let x = ((button.x() + button.w() / 2) as f32 * scale).round() as isize;
+        let y = ((button.y() + button.h() / 2) as f32 * scale).round() as isize;
+        unsafe {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                SendMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP,
+            };
+            let hwnd = radio.view.window.raw_handle();
+            SendMessageW(hwnd, WM_LBUTTONDOWN, 1, (y << 16) | x);
+            SendMessageW(hwnd, WM_LBUTTONUP, 0, (y << 16) | x);
+        }
+        let mut clicked = false;
+        while let Some(event) = events.recv() {
+            if matches!(event, Event::NextStream) {
+                radio.handle(event);
+                clicked = true;
+            }
+        }
+        assert!(clicked, "next symbol must receive the click");
+        assert_eq!((radio.view.window.x(), radio.view.window.y()), position);
+        let selected = radio.playing.as_ref().unwrap().stream.as_ref().unwrap();
+        assert_eq!(selected.index, 1);
+        assert_eq!(selected.url, playlist.streams[1]);
+        assert_eq!(radio.timer, timer);
+        assert_eq!(radio.playing.as_ref().unwrap().url, old_url);
+        radio.handle(Event::Playback(
+            radio.playback_id,
+            PlaybackEvent::Started(Instant::now()),
+        ));
+        assert_eq!(radio.view.stream_info.index.label(), "[2/4]");
+        assert!(radio.view.list.text(1).unwrap().contains("[2/4]"));
+        assert_eq!(radio.settings.last_station, Some(old_url.clone()));
+        radio.playback_event(PlaybackEvent::Failed("Disconnected".into()));
+        assert_eq!(
+            radio
+                .reconnect
+                .as_ref()
+                .unwrap()
+                .stream
+                .as_ref()
+                .unwrap()
+                .url,
+            playlist.streams[1]
+        );
+        assert!(
+            radio.view.stream_info.next.active(),
+            "allow skipping an unavailable stream during retries"
+        );
+        let due = radio.reconnect.as_ref().unwrap().due.unwrap();
+        radio.update(due);
+        assert_eq!(
+            radio
+                .playing
+                .as_ref()
+                .unwrap()
+                .stream
+                .as_ref()
+                .unwrap()
+                .index,
+            1
+        );
+        // Stream navigation also works before a connection finishes, so bad URLs can be skipped.
+        radio.handle(Event::NextStream);
+        radio.handle(Event::NextStream);
+        radio.handle(Event::Playback(
+            radio.playback_id,
+            PlaybackEvent::Started(Instant::now()),
+        ));
+        assert_eq!(radio.view.stream_info.index.label(), "[4/4]");
+        assert!(!radio.view.stream_info.next.active());
+        let last_id = radio.playback_id;
+        radio.handle(Event::NextStream);
+        assert_eq!(radio.playback_id, last_id);
+        radio.handle(Event::PreviousStream);
+        assert_eq!(
+            radio
+                .playing
+                .as_ref()
+                .unwrap()
+                .stream
+                .as_ref()
+                .unwrap()
+                .index,
+            2
+        );
+        assert_eq!(radio.timer, timer);
+        while inspections.try_recv().is_ok() {}
         radio.stop(radio.view.texts.playback_stopped);
+        assert!(!radio.view.stream_info.previous.active());
+        assert!(!radio.view.stream_info.next.active());
         assert!(!radio.view.list.text(1).unwrap().contains("[1/"));
         assert!(radio.view.stream_info.index.label().is_empty());
 

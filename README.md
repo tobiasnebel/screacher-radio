@@ -46,7 +46,7 @@ Stations and favorites are stored in **`stations.yaml` next to the executable**.
   favorite: false
 ```
 
-Replace these example URLs with your stations' HTTP(S) addresses. Direct MP3 streams and M3U / PLS playlists are supported; a playlist is treated as one station and plays its first stream.
+Replace these example URLs with your stations' HTTP(S) addresses. Direct MP3 streams and M3U / PLS playlists are supported; a playlist is treated as one station and starts with its first stream. Use the two triangle icons below the stream index to play the previous or next stream.
 
 The player saves changes to this file, so its folder must be writable. Close the player before editing the YAML manually. You can take the list with you by copying it alongside the executable.
 

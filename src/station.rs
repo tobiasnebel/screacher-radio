@@ -22,6 +22,12 @@ pub struct StationInfo {
     pub content: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamSelection {
+    pub index: usize,
+    pub url: Url,
+}
+
 pub fn inspect(url: &Url, texts: &Texts) -> Result<StationInfo, BoxError> {
     let agent: Agent = Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(15)))

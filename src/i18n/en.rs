@@ -26,6 +26,8 @@ pub(super) static TEXTS: Texts = Texts {
     edit: "Edit",
     save: "Save",
     station_info: "Stream info",
+    previous_stream: "Play previous stream",
+    next_stream: "Play next stream",
     loading_station_info: "Loading stream information…",
     cancel_reconnect: "Cancel reconnection attempts",
     retry_wait: |name, attempt, seconds, reason| {

@@ -7,7 +7,7 @@ Pro Benutzer läuft eine Instanz. Ein erneuter Start holt den laufenden Player a
 ## Bedienung
 
 - Ein Rechtsklick auf einen Sender öffnet **Editieren** für Name und URL sowie **Stream-Info** für den Playlist-Inhalt bzw. die direkte Stream-URL. Favoriten bleiben beim Editieren erhalten.
-- Nur beim laufenden Sender erscheinen **[1/4]** bzw. **[1/1]** in der Senderliste und rechts im Stream-Info-Kopf. Die Anzahl wird erst nach erfolgreichem Wiedergabestart im Hintergrund abgefragt; bis dahin steht **[1/?]**. Beim Programmstart werden keine Sender dafür automatisch abgefragt. Es wird weiterhin nur der erste Stream gespielt.
+- Nur beim laufenden Sender erscheinen **[1/4]** bzw. **[1/1]** in der Senderliste und rechts im Stream-Info-Kopf. Die Anzahl wird erst nach erfolgreichem Wiedergabestart im Hintergrund abgefragt; bis dahin steht **[1/?]**. Beim Programmstart werden keine Sender dafür automatisch abgefragt. Unter dem Index wechseln zwei rahmenlose Dreiecksymbole zum vorherigen bzw. nächsten Stream. An den Listenenden sind die jeweiligen Symbole deaktiviert. Wiederverbindungen behalten den gewählten Stream bei; der Sleeptimer läuft beim Wechsel weiter.
 - Nach einem Verbindungsabbruch versucht der Player die Wiederverbindung nach **1, 1, 2, 3, 5, 8 … Sekunden**, mit maximal **60 Sekunden Abstand**. Versuch und Countdown stehen in der Statuszeile. Das Kreuz rechts daneben oder **Stop** beendet die Versuche; der Sleeptimer gilt auch während der Wiederverbindung.
 
 - **Letzten Sender beim Programmstart abspielen** unter **Einstellungen** aktiviert Autoplay. Die Option ist anfangs ausgeschaltet und startet nur einen noch vorhandenen zuletzt gespielten Sender.

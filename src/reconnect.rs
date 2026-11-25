@@ -1,10 +1,12 @@
 use std::time::{Duration, Instant};
 
+use crate::station::StreamSelection;
 use url::Url;
 
 pub struct Reconnect {
     pub url: Url,
     pub name: String,
+    pub stream: Option<StreamSelection>,
     pub due: Option<Instant>,
     pub reason: String,
     pub attempts: u64,
@@ -17,6 +19,7 @@ impl Reconnect {
         Self {
             url,
             name,
+            stream: None,
             due: None,
             reason: String::new(),
             attempts: 0,
